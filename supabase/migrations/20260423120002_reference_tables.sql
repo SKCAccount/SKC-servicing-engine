@@ -148,9 +148,13 @@ CREATE UNIQUE INDEX uq_rule_sets_one_active_per_client
   ON rule_sets(client_id) WHERE effective_to IS NULL;
 
 -- ---------- Helper: current rule_set for a Client ----------
+-- SET search_path = public is CRITICAL: without it, the function's body
+-- reference to `rule_sets` fails to resolve when the function is inlined
+-- during CREATE MATERIALIZED VIEW (planner search_path is restricted).
 CREATE OR REPLACE FUNCTION current_rule_set(p_client_id uuid)
 RETURNS rule_sets
 LANGUAGE sql STABLE
+SET search_path = public
 AS $$
   SELECT * FROM rule_sets
   WHERE client_id = p_client_id AND effective_to IS NULL

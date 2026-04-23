@@ -26,6 +26,7 @@ CREATE TRIGGER trg_batches_updated_at BEFORE UPDATE ON batches
 CREATE OR REPLACE FUNCTION next_batch_number(p_client_id uuid)
 RETURNS int
 LANGUAGE sql STABLE
+SET search_path = public
 AS $$
   SELECT COALESCE(MAX(batch_number), 0) + 1
   FROM batches WHERE client_id = p_client_id;

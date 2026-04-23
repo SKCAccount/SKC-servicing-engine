@@ -4,6 +4,32 @@
 -- Refreshed by background job on event insert; diff-audited daily.
 -- ============================================================================
 
+-- ---------- Re-assert helper functions with explicit search_path ----------
+-- CREATE MATERIALIZED VIEW inlines SQL-language functions at planning time
+-- using a restricted search_path; without SET search_path on the function,
+-- table references inside the function body fail to resolve. Re-declare
+-- `current_rule_set` and `next_batch_number` here with the fix so that any
+-- existing deployment where 0002/0003 applied the broken version gets
+-- patched. CREATE OR REPLACE is a no-op on clean deployments.
+CREATE OR REPLACE FUNCTION current_rule_set(p_client_id uuid)
+RETURNS rule_sets
+LANGUAGE sql STABLE
+SET search_path = public
+AS $$
+  SELECT * FROM rule_sets
+  WHERE client_id = p_client_id AND effective_to IS NULL
+  LIMIT 1;
+$$;
+
+CREATE OR REPLACE FUNCTION next_batch_number(p_client_id uuid)
+RETURNS int
+LANGUAGE sql STABLE
+SET search_path = public
+AS $$
+  SELECT COALESCE(MAX(batch_number), 0) + 1
+  FROM batches WHERE client_id = p_client_id;
+$$;
+
 -- ---------- Per-advance running balances ----------
 -- The filter `reversed_by_event_id IS NULL` automatically excludes reversed events,
 -- giving clean undo semantics for free.
