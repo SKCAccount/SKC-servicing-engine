@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 560" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <defs>
+    <style>
+      .title { font-size: 20px; font-weight: 700; fill: #0f172a; }
+      .subtitle { font-size: 12px; fill: #64748b; }
+      .entity { fill: #ffffff; stroke: #334155; stroke-width: 1.5; }
+      .entity-new { fill: #ecfdf5; stroke: #059669; stroke-width: 2; }
+      .entity-view { fill: #e0f2fe; stroke: #0284c7; stroke-width: 1.5; stroke-dasharray: 4,2; }
+      .entity-title { font-size: 14px; font-weight: 700; fill: #0f172a; }
+      .entity-field { font-size: 11px; fill: #475569; }
+      .entity-key { font-size: 11px; fill: #0f172a; font-weight: 600; }
+      .entity-new-badge { font-size: 10px; font-weight: 700; fill: #059669; letter-spacing: 1px; }
+      .rel { stroke: #475569; stroke-width: 1.5; fill: none; }
+      .rel-cascade { stroke: #dc2626; stroke-width: 1.5; fill: none; }
+      .rel-view { stroke: #0284c7; stroke-width: 1.5; fill: none; stroke-dasharray: 4,2; }
+      .rel-label { font-size: 10px; fill: #64748b; }
+      .rel-cascade-label { font-size: 10px; fill: #dc2626; font-weight: 600; }
+      .section-label { font-size: 13px; font-weight: 700; fill: #64748b; letter-spacing: 1px; }
+      .note { font-size: 11px; fill: #475569; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#dc2626"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0284c7"/>
+    </marker>
+  </defs>
+
+  <text x="20" y="30" class="title">Schema ERD Supplement — Migrations 0009 &amp; 0010</text>
+  <text x="20" y="50" class="subtitle">New tables added to support Kroger client-level deductions (0009) and Walmart line-level PO data (0010)</text>
+
+  <!-- ============ Migration 0010 section ============ -->
+  <text x="20" y="100" class="section-label">MIGRATION 0010 — purchase_order_lines</text>
+
+  <!-- purchase_orders (existing) -->
+  <g transform="translate(40, 120)">
+    <rect width="220" height="180" class="entity"/>
+    <text x="110" y="20" text-anchor="middle" class="entity-title">purchase_orders</text>
+    <text x="110" y="36" text-anchor="middle" class="entity-field" font-style="italic">(existing)</text>
+    <line x1="8" y1="44" x2="212" y2="44" stroke="#cbd5e1"/>
+    <text x="12" y="60" class="entity-key">🔑 id</text>
+    <text x="12" y="76" class="entity-key">🔗 (client_id, retailer_id, po_number)</text>
+    <text x="12" y="92" class="entity-field">po_number, po_value_cents</text>
+    <text x="12" y="108" class="entity-field">status (active, cancelled, …)</text>
+    <text x="12" y="124" class="entity-field">cancellation_* (memo, reason, by)</text>
+    <text x="12" y="140" class="entity-field">issuance_date, delivery_date</text>
+    <text x="12" y="156" class="entity-field">delivery_location, quantity</text>
+    <text x="12" y="172" class="entity-field">upload_id, batch_id, parent_po_id</text>
+  </g>
+
+  <!-- purchase_order_lines (NEW) -->
+  <g transform="translate(340, 120)">
+    <rect width="240" height="230" class="entity-new"/>
+    <text x="120" y="20" text-anchor="middle" class="entity-title">purchase_order_lines</text>
+    <text x="120" y="36" text-anchor="middle" class="entity-new-badge">NEW — MIGRATION 0010</text>
+    <line x1="8" y1="44" x2="232" y2="44" stroke="#059669"/>
+    <text x="12" y="60" class="entity-key">🔑 id</text>
+    <text x="12" y="76" class="entity-key">→ purchase_order_id (CASCADE)</text>
+    <text x="12" y="92" class="entity-key">🔗 (purchase_order_id, line_number)</text>
+    <text x="12" y="108" class="entity-field">line_number (1-based, per PO)</text>
+    <text x="12" y="124" class="entity-field">retailer_item_number</text>
+    <text x="12" y="140" class="entity-field">item_description</text>
+    <text x="12" y="156" class="entity-field">quantity_ordered</text>
+    <text x="12" y="172" class="entity-field">unit_cost_cents</text>
+    <text x="12" y="188" class="entity-field">line_value_cents (NULL if cancelled)</text>
+    <text x="12" y="204" class="entity-field">status: approved / received /</text>
+    <text x="12" y="218" class="entity-field">partially_received / cancelled</text>
+  </g>
+
+  <!-- Relationship arrow: purchase_order_lines -> purchase_orders -->
+  <path class="rel-cascade" d="M 340 200 L 260 200" marker-end="url(#arrow-red)"/>
+  <text x="275" y="193" class="rel-cascade-label">N:1 CASCADE</text>
+
+  <!-- po_uploads -->
+  <g transform="translate(660, 120)">
+    <rect width="160" height="100" class="entity"/>
+    <text x="80" y="20" text-anchor="middle" class="entity-title">po_uploads</text>
+    <text x="80" y="36" text-anchor="middle" class="entity-field" font-style="italic">(existing)</text>
+    <line x1="8" y1="44" x2="152" y2="44" stroke="#cbd5e1"/>
+    <text x="12" y="60" class="entity-field">source_filename</text>
+    <text x="12" y="76" class="entity-field">storage_path</text>
+    <text x="12" y="92" class="entity-field">parser_version</text>
+  </g>
+
+  <!-- po_uploads → purchase_order_lines -->
+  <path class="rel" d="M 660 170 L 580 170" marker-end="url(#arrow)"/>
+  <text x="595" y="163" class="rel-label">upload_id</text>
+
+  <!-- Helper function -->
+  <g transform="translate(870, 180)">
+    <rect width="290" height="70" class="entity" fill="#f8fafc"/>
+    <text x="145" y="20" text-anchor="middle" class="entity-title">po_line_value_variance(po_id)</text>
+    <text x="145" y="36" text-anchor="middle" class="entity-field" font-style="italic">helper function</text>
+    <text x="12" y="54" class="entity-field">Returns po.po_value_cents − Σ(non-cancelled</text>
+    <text x="12" y="66" class="entity-field">line_value_cents). Should be 0; advisory only.</text>
+  </g>
+
+  <!-- Notes about 0010 -->
+  <g transform="translate(40, 370)">
+    <text class="note">• Full replacement upload behavior: DELETE all lines for PO, then INSERT incoming lines, atomic within the PO upsert transaction.</text>
+    <text y="16" class="note">• Cancelled lines have NULL line_value_cents (matches Walmart's NaN convention); CHECK constraint enforces this.</text>
+    <text y="32" class="note">• RLS scoped via parent PO's client_id. Custom audit trigger log_po_line_change() extracts client_id via the parent PO for audit_log filtering.</text>
+  </g>
+
+  <!-- Divider -->
+  <line x1="20" y1="430" x2="1180" y2="430" stroke="#cbd5e1"/>
+
+  <!-- ============ Migration 0009 section ============ -->
+  <text x="20" y="460" class="section-label">MIGRATION 0009 — client_deductions</text>
+
+  <!-- Note: this is a side-by-side view rather than a full relationships map -->
+  <g transform="translate(40, 480)">
+    <text class="note">See the full ERD (ERD.svg) for the relationships diagram across the whole schema. Key relationships for client_deductions:</text>
+    <text y="18" class="note">  — N:1 to clients (client_id) and retailers (retailer_id)</text>
+    <text y="34" class="note">  — N:1 to bank_transactions (reversed_by_bank_txn_id) — set only when a dispute resolves with status='reversed' and retailer wired the money back</text>
+    <text y="50" class="note">  — unioned with invoice_deductions via view v_all_deductions for the Deductions Report</text>
+  </g>
+</svg>

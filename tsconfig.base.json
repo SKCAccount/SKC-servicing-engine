@@ -1,0 +1,48 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": false,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "isolatedModules": true,
+    "jsx": "preserve",
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    "skipLibCheck": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+
+    "baseUrl": ".",
+    "paths": {
+      "@seaking/money": ["packages/money/src/index.ts"],
+      "@seaking/money/*": ["packages/money/src/*"],
+      "@seaking/dates": ["packages/dates/src/index.ts"],
+      "@seaking/dates/*": ["packages/dates/src/*"],
+      "@seaking/validators": ["packages/validators/src/index.ts"],
+      "@seaking/validators/*": ["packages/validators/src/*"],
+      "@seaking/db": ["packages/db/src/index.ts"],
+      "@seaking/db/*": ["packages/db/src/*"],
+      "@seaking/auth": ["packages/auth/src/index.ts"],
+      "@seaking/auth/*": ["packages/auth/src/*"],
+      "@seaking/ui": ["packages/ui/src/index.ts"],
+      "@seaking/ui/*": ["packages/ui/src/*"],
+      "@seaking/api": ["packages/api/src/index.ts"],
+      "@seaking/api/*": ["packages/api/src/*"],
+      "@seaking/notifications": ["packages/notifications/src/index.ts"],
+      "@seaking/notifications/*": ["packages/notifications/src/*"]
+    }
+  }
+}

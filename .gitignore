@@ -1,0 +1,58 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+.next/
+dist/
+build/
+out/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+
+# Environment
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Testing / coverage
+coverage/
+*.lcov
+.nyc_output/
+
+# Supabase
+supabase/.branches/
+supabase/.temp/
+
+# Generated types (committed, but ignore local regenerations in other locations)
+# packages/db/types.ts is committed
+
+# Sensitive reference data
+Reference CSVs/
+_build_files/
+
+# Misc
+*.tgz

@@ -1,0 +1,34 @@
+{
+  "name": "sea-king-command",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Sea King Capital PO Financing & AR Factoring System of Record",
+  "packageManager": "pnpm@10.33.2",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter \"./apps/*\" dev",
+    "dev:manager": "pnpm --filter @seaking/manager dev",
+    "dev:client-portal": "pnpm --filter @seaking/client-portal dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "test:watch": "pnpm -r test:watch",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json,yaml,yml}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,md,json,yaml,yml}\"",
+    "db:link": "supabase link --project-ref ucfyfnwkxzryywuomool",
+    "db:push": "supabase db push",
+    "db:reset": "supabase db reset",
+    "db:types": "supabase gen types typescript --project-id ucfyfnwkxzryywuomool --schema public > packages/db/src/types.ts",
+    "db:diff": "supabase db diff",
+    "clean": "pnpm -r exec rm -rf node_modules dist .next .turbo && rm -rf node_modules"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prettier": "^3.4.0",
+    "typescript": "^5.7.0"
+  }
+}

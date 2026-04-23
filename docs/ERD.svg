@@ -1,0 +1,484 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1700 1180" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <defs>
+    <style>
+      .layer-label { font-size: 13px; font-weight: 700; fill: #64748b; letter-spacing: 1px; }
+      .entity { fill: #ffffff; stroke: #334155; stroke-width: 1.5; }
+      .entity-event { fill: #fef3c7; stroke: #d97706; stroke-width: 2; }
+      .entity-mv { fill: #e0f2fe; stroke: #0284c7; stroke-width: 1.5; }
+      .entity-audit { fill: #f3e8ff; stroke: #7e22ce; stroke-width: 1.5; }
+      .entity-stub { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 1.5; stroke-dasharray: 4,3; }
+      .entity-title { font-size: 14px; font-weight: 700; fill: #0f172a; }
+      .entity-field { font-size: 11px; fill: #475569; }
+      .entity-key { font-size: 11px; fill: #0f172a; font-weight: 600; }
+      .rel { stroke: #475569; stroke-width: 1.5; fill: none; }
+      .rel-event { stroke: #d97706; stroke-width: 1.5; fill: none; stroke-dasharray: 5,3; }
+      .rel-label { font-size: 10px; fill: #64748b; }
+      .layer-bg { fill: #f8fafc; }
+      .title { font-size: 22px; font-weight: 700; fill: #0f172a; }
+      .subtitle { font-size: 13px; fill: #64748b; }
+      .legend-label { font-size: 11px; fill: #334155; }
+    </style>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="10" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="30" y="32" class="title">Sea King Capital — Schema ERD</text>
+  <text x="30" y="54" class="subtitle">Reference data · Operational · Event log (append-only) · Projections · Audit</text>
+
+  <!-- Legend -->
+  <g transform="translate(1050, 22)">
+    <rect x="0" y="0" width="14" height="14" class="entity"/>
+    <text x="20" y="11" class="legend-label">Reference / operational table</text>
+    <rect x="0" y="22" width="14" height="14" class="entity-event"/>
+    <text x="20" y="33" class="legend-label">Event log (append-only)</text>
+    <rect x="260" y="0" width="14" height="14" class="entity-mv"/>
+    <text x="280" y="11" class="legend-label">Materialized view (projection)</text>
+    <rect x="260" y="22" width="14" height="14" class="entity-audit"/>
+    <text x="280" y="33" class="legend-label">Audit log</text>
+    <rect x="490" y="0" width="14" height="14" class="entity-stub"/>
+    <text x="510" y="11" class="legend-label">Phase 2 stub (schema only)</text>
+  </g>
+
+  <!-- ================= Layer backgrounds ================= -->
+  <rect x="10" y="80" width="1680" height="230" class="layer-bg"/>
+  <text x="20" y="100" class="layer-label">REFERENCE DATA</text>
+
+  <rect x="10" y="320" width="1680" height="340" class="layer-bg"/>
+  <text x="20" y="340" class="layer-label">OPERATIONAL ENTITIES</text>
+
+  <rect x="10" y="670" width="1680" height="200" class="layer-bg"/>
+  <text x="20" y="690" class="layer-label">EVENT LOG (APPEND-ONLY SOURCE OF TRUTH)</text>
+
+  <rect x="10" y="880" width="1680" height="170" class="layer-bg"/>
+  <text x="20" y="900" class="layer-label">PROJECTIONS &amp; AUDIT</text>
+
+  <!-- ================= REFERENCE LAYER ================= -->
+  <!-- clients -->
+  <g transform="translate(40, 120)">
+    <rect width="160" height="150" class="entity"/>
+    <text x="80" y="20" text-anchor="middle" class="entity-title">clients</text>
+    <line x1="8" y1="28" x2="152" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id</text>
+    <text x="12" y="62" class="entity-field">legal_name</text>
+    <text x="12" y="77" class="entity-field">display_name</text>
+    <text x="12" y="92" class="entity-field">status</text>
+    <text x="12" y="107" class="entity-field">over_advanced_state</text>
+    <text x="12" y="122" class="entity-field">over_advanced_since</text>
+    <text x="12" y="138" class="entity-field">version</text>
+  </g>
+
+  <!-- retailers -->
+  <g transform="translate(230, 120)">
+    <rect width="170" height="130" class="entity"/>
+    <text x="85" y="20" text-anchor="middle" class="entity-title">retailers</text>
+    <line x1="8" y1="28" x2="162" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id</text>
+    <text x="12" y="62" class="entity-field">name (unique)</text>
+    <text x="12" y="77" class="entity-field">display_name</text>
+    <text x="12" y="92" class="entity-field">bank_description_patterns[]</text>
+    <text x="12" y="107" class="entity-field">has_standardized_parser</text>
+  </g>
+
+  <!-- users -->
+  <g transform="translate(430, 120)">
+    <rect width="160" height="150" class="entity"/>
+    <text x="80" y="20" text-anchor="middle" class="entity-title">users</text>
+    <line x1="8" y1="28" x2="152" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id → auth.users</text>
+    <text x="12" y="62" class="entity-field">email</text>
+    <text x="12" y="77" class="entity-field">role</text>
+    <text x="12" y="92" class="entity-key">→ client_id (Client only)</text>
+    <text x="12" y="107" class="entity-field">status</text>
+    <text x="12" y="122" class="entity-field">notification_prefs</text>
+    <text x="12" y="138" class="entity-field">version</text>
+  </g>
+
+  <!-- user_client_access -->
+  <g transform="translate(620, 120)">
+    <rect width="170" height="100" class="entity"/>
+    <text x="85" y="20" text-anchor="middle" class="entity-title">user_client_access</text>
+    <line x1="8" y1="28" x2="162" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 (user_id, client_id)</text>
+    <text x="12" y="62" class="entity-field">granted_by</text>
+    <text x="12" y="77" class="entity-field">granted_at</text>
+  </g>
+
+  <!-- rule_sets -->
+  <g transform="translate(820, 120)">
+    <rect width="220" height="200" class="entity"/>
+    <text x="110" y="20" text-anchor="middle" class="entity-title">rule_sets (immutable snapshots)</text>
+    <line x1="8" y1="28" x2="212" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id</text>
+    <text x="12" y="62" class="entity-key">→ client_id</text>
+    <text x="12" y="77" class="entity-field">effective_from / to</text>
+    <text x="12" y="92" class="entity-field">period_1/2/subsequent_days</text>
+    <text x="12" y="107" class="entity-field">period_1/2/subsequent_fee_bps</text>
+    <text x="12" y="122" class="entity-field">po/ar/pre_advance_rate_bps</text>
+    <text x="12" y="137" class="entity-field">ar_aged_out_days</text>
+    <text x="12" y="152" class="entity-field">aged_out_warning_lead_days</text>
+    <text x="12" y="167" class="entity-field">pmt_alloc_principal/fee_bps</text>
+    <text x="12" y="182" class="entity-field">(must sum to 10000)</text>
+  </g>
+
+  <!-- investors/creditors stubs -->
+  <g transform="translate(1070, 120)">
+    <rect width="140" height="80" class="entity-stub"/>
+    <text x="70" y="20" text-anchor="middle" class="entity-title">investors</text>
+    <text x="70" y="40" text-anchor="middle" class="entity-field">Phase 2 stub</text>
+    <text x="12" y="60" class="entity-key">🔑 id</text>
+    <text x="12" y="72" class="entity-field">name, contact_email</text>
+  </g>
+  <g transform="translate(1070, 210)">
+    <rect width="140" height="80" class="entity-stub"/>
+    <text x="70" y="20" text-anchor="middle" class="entity-title">creditors</text>
+    <text x="70" y="40" text-anchor="middle" class="entity-field">Phase 2 stub</text>
+    <text x="12" y="60" class="entity-key">🔑 id</text>
+    <text x="12" y="72" class="entity-field">name, contact_email</text>
+  </g>
+  <g transform="translate(1240, 120)">
+    <rect width="170" height="80" class="entity-stub"/>
+    <text x="85" y="20" text-anchor="middle" class="entity-title">investor_client_access</text>
+    <text x="12" y="45" class="entity-key">🔑 (investor, client)</text>
+    <text x="12" y="62" class="entity-field">granted_by, granted_at</text>
+  </g>
+  <g transform="translate(1240, 210)">
+    <rect width="170" height="80" class="entity-stub"/>
+    <text x="85" y="20" text-anchor="middle" class="entity-title">creditor_client_access</text>
+    <text x="12" y="45" class="entity-key">🔑 (creditor, client)</text>
+    <text x="12" y="62" class="entity-field">granted_by, granted_at</text>
+  </g>
+
+  <!-- Relationships in reference layer -->
+  <!-- user_client_access → users, clients -->
+  <path class="rel" d="M 620 165 L 590 165" marker-end="url(#arrow)"/>
+  <text x="595" y="160" class="rel-label">N:1</text>
+  <path class="rel" d="M 620 190 Q 400 200 200 200" marker-end="url(#arrow)"/>
+  <text x="380" y="197" class="rel-label">N:1</text>
+  <!-- rule_sets → clients -->
+  <path class="rel" d="M 820 145 Q 400 150 200 150" marker-end="url(#arrow)"/>
+  <text x="480" y="142" class="rel-label">N:1</text>
+  <!-- users → clients -->
+  <path class="rel" d="M 430 180 Q 300 180 200 175" marker-end="url(#arrow)"/>
+  <text x="310" y="175" class="rel-label">client role only</text>
+
+  <!-- ================= OPERATIONAL LAYER ================= -->
+  <!-- batches -->
+  <g transform="translate(40, 360)">
+    <rect width="140" height="100" class="entity"/>
+    <text x="70" y="20" text-anchor="middle" class="entity-title">batches</text>
+    <line x1="8" y1="28" x2="132" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id</text>
+    <text x="12" y="62" class="entity-key">→ client_id</text>
+    <text x="12" y="77" class="entity-field">batch_number (seq)</text>
+    <text x="12" y="92" class="entity-field">name (generated)</text>
+  </g>
+
+  <!-- purchase_orders -->
+  <g transform="translate(210, 360)">
+    <rect width="200" height="230" class="entity"/>
+    <text x="100" y="20" text-anchor="middle" class="entity-title">purchase_orders</text>
+    <line x1="8" y1="28" x2="192" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id</text>
+    <text x="12" y="62" class="entity-key">🔗 (client, retailer, po_number)</text>
+    <text x="12" y="77" class="entity-key">→ batch_id (nullable)</text>
+    <text x="12" y="92" class="entity-field">po_number, po_value_cents</text>
+    <text x="12" y="107" class="entity-field">issuance/delivery_date</text>
+    <text x="12" y="122" class="entity-field">status</text>
+    <text x="12" y="137" class="entity-field">cancellation_reason_category</text>
+    <text x="12" y="152" class="entity-field">cancellation_memo</text>
+    <text x="12" y="167" class="entity-field">cancelled_at / by</text>
+    <text x="12" y="182" class="entity-key">→ parent_po_id (self)</text>
+    <text x="12" y="197" class="entity-key">→ upload_id</text>
+    <text x="12" y="214" class="entity-field">version</text>
+  </g>
+
+  <!-- invoices -->
+  <g transform="translate(440, 360)">
+    <rect width="190" height="180" class="entity"/>
+    <text x="95" y="20" text-anchor="middle" class="entity-title">invoices</text>
+    <line x1="8" y1="28" x2="182" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id</text>
+    <text x="12" y="62" class="entity-key">→ purchase_order_id</text>
+    <text x="12" y="77" class="entity-field">invoice_number</text>
+    <text x="12" y="92" class="entity-field">invoice_value_cents</text>
+    <text x="12" y="107" class="entity-field">invoice_date / due_date</text>
+    <text x="12" y="122" class="entity-field">goods_delivery_date / loc</text>
+    <text x="12" y="137" class="entity-field">approval_status</text>
+    <text x="12" y="152" class="entity-field">paid_in_full_date</text>
+    <text x="12" y="167" class="entity-key">→ upload_id</text>
+  </g>
+
+  <!-- invoice_deductions -->
+  <g transform="translate(440, 550)">
+    <rect width="190" height="100" class="entity"/>
+    <text x="95" y="20" text-anchor="middle" class="entity-title">invoice_deductions</text>
+    <line x1="8" y1="28" x2="182" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id; → invoice_id</text>
+    <text x="12" y="62" class="entity-field">category, amount_cents</text>
+    <text x="12" y="77" class="entity-field">known_on_date, memo</text>
+    <text x="12" y="92" class="entity-key">→ payment_id (bank_txn)</text>
+  </g>
+
+  <!-- advances -->
+  <g transform="translate(660, 360)">
+    <rect width="230" height="290" class="entity"/>
+    <text x="115" y="20" text-anchor="middle" class="entity-title">advances</text>
+    <line x1="8" y1="28" x2="222" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id</text>
+    <text x="12" y="62" class="entity-key">→ client_id, po_id</text>
+    <text x="12" y="77" class="entity-key">→ invoice_id (AR only)</text>
+    <text x="12" y="92" class="entity-key">→ batch_id, rule_set_id</text>
+    <text x="12" y="107" class="entity-field">advance_type (po/ar/pre)</text>
+    <text x="12" y="122" class="entity-field">advance_date (fee clock)</text>
+    <text x="12" y="137" class="entity-field">initial_principal_cents</text>
+    <text x="12" y="152" class="entity-field">committed_at / by</text>
+    <text x="12" y="167" class="entity-field">funded_at / wire_number</text>
+    <text x="12" y="182" class="entity-key">→ funded_by_bank_txn_id</text>
+    <text x="12" y="197" class="entity-field">status</text>
+    <text x="12" y="212" class="entity-key">→ transferred_from_advance</text>
+    <text x="12" y="227" class="entity-key">→ transferred_to_advance</text>
+    <text x="12" y="242" class="entity-key">→ advance_request_id</text>
+    <text x="12" y="257" class="entity-key">→ capital_src_investor/creditor</text>
+    <text x="12" y="272" class="entity-field">version</text>
+  </g>
+
+  <!-- one_time_fees -->
+  <g transform="translate(920, 360)">
+    <rect width="180" height="130" class="entity"/>
+    <text x="90" y="20" text-anchor="middle" class="entity-title">one_time_fees</text>
+    <line x1="8" y1="28" x2="172" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id; → client_id</text>
+    <text x="12" y="62" class="entity-field">target_type</text>
+    <text x="12" y="77" class="entity-field">target_id (polymorphic)</text>
+    <text x="12" y="92" class="entity-field">amount_cents, description</text>
+    <text x="12" y="107" class="entity-field">assessed_date / by</text>
+  </g>
+
+  <!-- advance_requests -->
+  <g transform="translate(920, 500)">
+    <rect width="180" height="140" class="entity"/>
+    <text x="90" y="20" text-anchor="middle" class="entity-title">advance_requests</text>
+    <line x1="8" y1="28" x2="172" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id; → client_id</text>
+    <text x="12" y="62" class="entity-field">requested_by, amount_cents</text>
+    <text x="12" y="77" class="entity-field">context_text</text>
+    <text x="12" y="92" class="entity-field">status (pending→fulfilled)</text>
+    <text x="12" y="107" class="entity-field">reviewed_by / at</text>
+    <text x="12" y="122" class="entity-field">rejection_reason</text>
+  </g>
+
+  <!-- bank_transactions -->
+  <g transform="translate(1120, 360)">
+    <rect width="200" height="200" class="entity"/>
+    <text x="100" y="20" text-anchor="middle" class="entity-title">bank_transactions</text>
+    <line x1="8" y1="28" x2="192" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id; → client_id</text>
+    <text x="12" y="62" class="entity-key">→ bank_upload_id</text>
+    <text x="12" y="77" class="entity-field">posting_date, amount_cents</text>
+    <text x="12" y="92" class="entity-field">description</text>
+    <text x="12" y="107" class="entity-field">bank_classified_type</text>
+    <text x="12" y="122" class="entity-field">direction (credit/debit)</text>
+    <text x="12" y="137" class="entity-key">→ retailer_id</text>
+    <text x="12" y="152" class="entity-field">memo_classification</text>
+    <text x="12" y="167" class="entity-field">status</text>
+    <text x="12" y="182" class="entity-field">principal_only_override</text>
+  </g>
+
+  <!-- retailer_payment_details -->
+  <g transform="translate(1340, 360)">
+    <rect width="200" height="200" class="entity"/>
+    <text x="100" y="20" text-anchor="middle" class="entity-title">retailer_payment_details</text>
+    <line x1="8" y1="28" x2="192" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id; → upload, retailer</text>
+    <text x="12" y="62" class="entity-field">po_number, invoice_number</text>
+    <text x="12" y="77" class="entity-field">payment_date, invoice_date</text>
+    <text x="12" y="92" class="entity-field">invoice_amount_cents</text>
+    <text x="12" y="107" class="entity-field">discount / deduction_cents</text>
+    <text x="12" y="122" class="entity-field">paid_amount_cents</text>
+    <text x="12" y="137" class="entity-key">→ matched_bank_txn_id</text>
+    <text x="12" y="152" class="entity-field">match_type (strict/fuzzy/manual)</text>
+    <text x="12" y="167" class="entity-key">→ resolved_invoice_id</text>
+  </g>
+
+  <!-- payment_bank_links -->
+  <g transform="translate(1120, 590)">
+    <rect width="200" height="90" class="entity"/>
+    <text x="100" y="20" text-anchor="middle" class="entity-title">payment_bank_links</text>
+    <line x1="8" y1="28" x2="192" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">→ bank_transaction_id</text>
+    <text x="12" y="62" class="entity-field">target_type (invoice/batch)</text>
+    <text x="12" y="77" class="entity-field">target_id, amount_cents</text>
+  </g>
+
+  <!-- remittances -->
+  <g transform="translate(1340, 590)">
+    <rect width="200" height="110" class="entity"/>
+    <text x="100" y="20" text-anchor="middle" class="entity-title">remittances</text>
+    <line x1="8" y1="28" x2="192" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-key">🔑 id; → client_id</text>
+    <text x="12" y="62" class="entity-field">wire_amount_cents</text>
+    <text x="12" y="77" class="entity-field">wire_date (Manager-edit)</text>
+    <text x="12" y="92" class="entity-field">wire_tracking_number</text>
+  </g>
+
+  <!-- Upload tables cluster -->
+  <g transform="translate(40, 490)">
+    <rect width="140" height="150" class="entity"/>
+    <text x="70" y="20" text-anchor="middle" class="entity-title">*_uploads</text>
+    <line x1="8" y1="28" x2="132" y2="28" stroke="#cbd5e1"/>
+    <text x="12" y="45" class="entity-field">po_uploads</text>
+    <text x="12" y="60" class="entity-field">invoice_uploads</text>
+    <text x="12" y="75" class="entity-field">bank_uploads</text>
+    <text x="12" y="90" class="entity-field">retailer_payment_uploads</text>
+    <line x1="8" y1="98" x2="132" y2="98" stroke="#cbd5e1"/>
+    <text x="12" y="113" class="entity-field">source_filename</text>
+    <text x="12" y="128" class="entity-field">storage_path</text>
+    <text x="12" y="143" class="entity-field">parser_version</text>
+  </g>
+
+  <!-- advance_request_attachments -->
+  <g transform="translate(920, 655)">
+    <rect width="180" height="60" class="entity"/>
+    <text x="90" y="20" text-anchor="middle" class="entity-title">advance_req_attachments</text>
+    <text x="12" y="40" class="entity-field">storage_path, filename</text>
+    <text x="12" y="55" class="entity-field">mime_type, size_bytes</text>
+  </g>
+
+  <!-- Relationships in operational layer -->
+  <!-- batches → clients -->
+  <path class="rel" d="M 110 360 L 110 270" marker-end="url(#arrow)"/>
+  <text x="115" y="320" class="rel-label">N:1</text>
+  <!-- PO → batches, clients, retailers -->
+  <path class="rel" d="M 210 450 L 180 450" marker-end="url(#arrow)"/>
+  <text x="185" y="445" class="rel-label">N:1</text>
+  <path class="rel" d="M 260 360 Q 180 320 150 270" marker-end="url(#arrow)"/>
+  <path class="rel" d="M 310 360 Q 320 310 315 250" marker-end="url(#arrow)"/>
+  <!-- PO upload_id → po_uploads -->
+  <path class="rel" d="M 260 590 Q 150 620 180 490" marker-end="url(#arrow)"/>
+  <!-- invoices → PO -->
+  <path class="rel" d="M 440 430 L 410 430" marker-end="url(#arrow)"/>
+  <text x="415" y="425" class="rel-label">N:1</text>
+  <!-- deductions → invoices -->
+  <path class="rel" d="M 535 550 L 535 540" marker-end="url(#arrow)"/>
+  <text x="540" y="548" class="rel-label">N:1</text>
+  <!-- advances → po, invoice, batch, client, rule_set -->
+  <path class="rel" d="M 660 450 L 630 450" marker-end="url(#arrow)"/>
+  <text x="635" y="445" class="rel-label">N:1</text>
+  <path class="rel" d="M 660 480 Q 635 520 630 510" marker-end="url(#arrow)"/>
+  <path class="rel" d="M 770 360 Q 850 240 930 220" marker-end="url(#arrow)"/>
+  <text x="820" y="300" class="rel-label">rule_set (frozen)</text>
+  <!-- advances → advance_requests -->
+  <path class="rel" d="M 890 540 L 920 540" marker-end="url(#arrow)"/>
+  <text x="895" y="534" class="rel-label">fulfillment</text>
+  <!-- advances → bank_txns (funded_by) -->
+  <path class="rel" d="M 890 420 L 1120 420" marker-end="url(#arrow)"/>
+  <text x="970" y="415" class="rel-label">funded_by</text>
+  <!-- retailer_payment → bank_txn -->
+  <path class="rel" d="M 1340 430 L 1320 430" marker-end="url(#arrow)"/>
+  <text x="1324" y="424" class="rel-label">match</text>
+  <!-- retailer_payment → invoices -->
+  <path class="rel" d="M 1440 560 Q 900 680 630 450" marker-end="url(#arrow)"/>
+  <text x="1000" y="680" class="rel-label">resolved_invoice_id</text>
+  <!-- payment_bank_links → bank_txns -->
+  <path class="rel" d="M 1220 590 L 1220 560" marker-end="url(#arrow)"/>
+  <!-- deductions → bank_txns (payment_id) -->
+  <path class="rel" d="M 630 600 L 1120 470" marker-end="url(#arrow)"/>
+  <text x="750" y="595" class="rel-label">payment_id</text>
+
+  <!-- ================= EVENT LAYER ================= -->
+  <g transform="translate(500, 710)">
+    <rect width="700" height="150" class="entity-event"/>
+    <text x="350" y="22" text-anchor="middle" class="entity-title">ledger_events (APPEND-ONLY · SOURCE OF TRUTH)</text>
+    <line x1="8" y1="30" x2="692" y2="30" stroke="#d97706"/>
+    <text x="12" y="48" class="entity-key">🔑 id    event_seq (monotonic)    event_type</text>
+    <text x="12" y="65" class="entity-key">→ client_id · advance_id · purchase_order_id · invoice_id · batch_id</text>
+    <text x="12" y="82" class="entity-key">→ bank_transaction_id · remittance_id · one_time_fee_id</text>
+    <text x="12" y="99" class="entity-field">effective_date (business) · recorded_at (system) · created_by</text>
+    <text x="12" y="116" class="entity-field">principal_delta_cents · fee_delta_cents · remittance_delta_cents (signed)</text>
+    <text x="12" y="133" class="entity-key">reverses_event_id ⇄ reversed_by_event_id    metadata (waterfall priority, etc.)</text>
+  </g>
+
+  <!-- Arrows from operational entities INTO ledger_events (orange dashed) -->
+  <path class="rel-event" d="M 500 780 Q 400 780 360 650" marker-end="url(#arrow-orange)"/>
+  <path class="rel-event" d="M 500 760 Q 700 700 775 650" marker-end="url(#arrow-orange)"/>
+  <path class="rel-event" d="M 1000 760 Q 1100 720 1220 560" marker-end="url(#arrow-orange)"/>
+  <path class="rel-event" d="M 1100 780 Q 1280 720 1440 700" marker-end="url(#arrow-orange)"/>
+  <path class="rel-event" d="M 900 760 Q 1000 710 1010 490" marker-end="url(#arrow-orange)"/>
+
+  <!-- ================= PROJECTION + AUDIT LAYER ================= -->
+  <g transform="translate(40, 920)">
+    <rect width="220" height="100" class="entity-mv"/>
+    <text x="110" y="20" text-anchor="middle" class="entity-title">mv_advance_balances</text>
+    <line x1="8" y1="28" x2="212" y2="28" stroke="#0284c7"/>
+    <text x="12" y="45" class="entity-field">advance_id → advances</text>
+    <text x="12" y="62" class="entity-field">principal_outstanding_cents</text>
+    <text x="12" y="77" class="entity-field">fees_outstanding_cents</text>
+    <text x="12" y="92" class="entity-field">last_principal_payment_date</text>
+  </g>
+
+  <g transform="translate(290, 920)">
+    <rect width="220" height="100" class="entity-mv"/>
+    <text x="110" y="20" text-anchor="middle" class="entity-title">mv_invoice_aging</text>
+    <line x1="8" y1="28" x2="212" y2="28" stroke="#0284c7"/>
+    <text x="12" y="45" class="entity-field">days_outstanding</text>
+    <text x="12" y="62" class="entity-field">age_bucket (current/1-30/…/90+)</text>
+    <text x="12" y="77" class="entity-field">is_aged_out (per rule_set)</text>
+    <text x="12" y="92" class="entity-field">effective_invoice_value_cents</text>
+  </g>
+
+  <g transform="translate(540, 920)">
+    <rect width="240" height="100" class="entity-mv"/>
+    <text x="120" y="20" text-anchor="middle" class="entity-title">mv_client_position</text>
+    <line x1="8" y1="28" x2="232" y2="28" stroke="#0284c7"/>
+    <text x="12" y="45" class="entity-field">po/ar/pre_advance_principal_cents</text>
+    <text x="12" y="62" class="entity-field">borrowing_base[_available]_cents</text>
+    <text x="12" y="77" class="entity-field">remittance_balance_cents</text>
+    <text x="12" y="92" class="entity-field">is_over_advanced</text>
+  </g>
+
+  <g transform="translate(810, 920)">
+    <rect width="200" height="100" class="entity-mv"/>
+    <text x="100" y="20" text-anchor="middle" class="entity-title">mv_batch_position</text>
+    <line x1="8" y1="28" x2="192" y2="28" stroke="#0284c7"/>
+    <text x="12" y="45" class="entity-field">batch_id → batches</text>
+    <text x="12" y="62" class="entity-field">active_advance_count</text>
+    <text x="12" y="77" class="entity-field">principal_outstanding_cents</text>
+    <text x="12" y="92" class="entity-field">fees_outstanding_cents</text>
+  </g>
+
+  <g transform="translate(1040, 920)">
+    <rect width="220" height="100" class="entity-audit"/>
+    <text x="110" y="20" text-anchor="middle" class="entity-title">audit_log</text>
+    <line x1="8" y1="28" x2="212" y2="28" stroke="#7e22ce"/>
+    <text x="12" y="45" class="entity-field">table_name, row_id, operation</text>
+    <text x="12" y="62" class="entity-field">changed_by, changed_at</text>
+    <text x="12" y="77" class="entity-field">before, after (jsonb)</text>
+    <text x="12" y="92" class="entity-field">client_id (extracted for RLS)</text>
+  </g>
+
+  <!-- Projection arrows from events -->
+  <path class="rel-event" d="M 850 860 L 150 920" marker-end="url(#arrow-orange)"/>
+  <path class="rel-event" d="M 850 860 L 400 920" marker-end="url(#arrow-orange)"/>
+  <path class="rel-event" d="M 850 860 L 660 920" marker-end="url(#arrow-orange)"/>
+  <path class="rel-event" d="M 850 860 L 910 920" marker-end="url(#arrow-orange)"/>
+  <text x="850" y="885" class="rel-label" text-anchor="middle">derived from ledger_events</text>
+
+  <!-- Audit arrows from reference tables -->
+  <path class="rel" d="M 1150 920 Q 1150 800 1150 320" marker-end="url(#arrow)"/>
+  <text x="1160" y="700" class="rel-label" transform="rotate(90 1160 700)">audit trigger on every reference table</text>
+
+  <!-- Notes at the bottom -->
+  <g transform="translate(40, 1060)">
+    <text class="entity-field" font-size="11">Key invariants (enforced by schema): (1) three-part PO unique key = (client_id, retailer_id, po_number); (2) ledger_events is append-only — UPDATE/DELETE blocked by trigger; corrections are compensating events;</text>
+    <text y="15" class="entity-field" font-size="11">(3) rule_sets are immutable snapshots — advance.rule_set_id frozen at creation makes fees prospective; current_rule_set() reads the active snapshot for retroactive borrowing base;</text>
+    <text y="30" class="entity-field" font-size="11">(4) payment_allocation_principal_bps + payment_allocation_fee_bps = 10000 (CHECK); (5) every money column is bigint cents, every business date is date anchored to America/New_York;</text>
+    <text y="45" class="entity-field" font-size="11">(6) RLS enabled on every table, scoped by current_user_client_ids(); (7) audit_log captures every reference-table change (not financial events — those are in ledger_events);</text>
+    <text y="60" class="entity-field" font-size="11">(8) optimistic locking via version column on every mutable reference row; (9) investors/creditors tables are Phase 2 stubs — schema present, no UI, nullable FKs on advances for future capital attribution.</text>
+  </g>
+</svg>
