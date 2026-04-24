@@ -135,7 +135,23 @@ export function UploadPoForm({ clientId }: { clientId: string }) {
           onChange={(e) => setFile(e.target.files?.[0] ?? null)}
           className="w-full rounded border border-seaking-border bg-white px-3 py-2 text-sm"
         />
-        <p className="mt-1 text-xs text-seaking-muted">CSV only for Phase 1. XLSX support lands in 1E with the invoice parsers.</p>
+        <p className="mt-1 text-xs text-seaking-muted">
+          CSV only for Phase 1. XLSX support lands in 1E with the invoice parsers.
+        </p>
+        {retailer === 'generic' && (
+          <p className="mt-2 text-xs">
+            <a
+              href="/api/po-template/generic"
+              className="text-seaking-navy hover:underline"
+              download
+            >
+              Download the Generic CSV template →
+            </a>{' '}
+            <span className="text-seaking-muted">
+              (header row only — fill it in, save as CSV, upload here)
+            </span>
+          </p>
+        )}
       </div>
 
       {error && (
