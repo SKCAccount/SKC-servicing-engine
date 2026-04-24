@@ -121,6 +121,7 @@ export default async function ClientDashboardPage({ params }: PageProps) {
           description="Browse every PO on file for this Client with filters."
           href={`/clients/${c.id}/purchase-orders`}
           phase="1C"
+          live
         />
         <ActionCard title="Advance on Purchase Orders" phase="1D" />
         <ActionCard title="Invoice Upload" phase="1E" />
