@@ -18,6 +18,7 @@ interface FiltersFormProps {
   retailers: Array<{ slug: string; label: string }>;
   batches: Array<{ id: string; label: string }>;
   statuses: Array<{ value: string; label: string }>;
+  pageSizeOptions: number[];
   initial: {
     q: string | null;
     retailer: string | null;
@@ -29,6 +30,9 @@ interface FiltersFormProps {
     value_max: number | null;
     uploaded_from: string | null;
     uploaded_to: string | null;
+    page_size: number;
+    sort: string;
+    dir: string;
   };
 }
 
@@ -37,6 +41,7 @@ export function FiltersForm({
   retailers,
   batches,
   statuses,
+  pageSizeOptions,
   initial,
 }: FiltersFormProps) {
   const router = useRouter();
@@ -50,6 +55,7 @@ export function FiltersForm({
   const [valueMax, setValueMax] = useState(initial.value_max != null ? (initial.value_max / 100).toString() : '');
   const [uploadedFrom, setUploadedFrom] = useState(initial.uploaded_from ?? '');
   const [uploadedTo, setUploadedTo] = useState(initial.uploaded_to ?? '');
+  const [pageSize, setPageSize] = useState(String(initial.page_size));
 
   function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -64,6 +70,11 @@ export function FiltersForm({
     if (valueMax) params.set('valueMax', valueMax);
     if (uploadedFrom) params.set('uploadedFrom', uploadedFrom);
     if (uploadedTo) params.set('uploadedTo', uploadedTo);
+    if (pageSize) params.set('pageSize', pageSize);
+    // Preserve sort across filter changes (filters reset to page 1, but
+    // keep the user's chosen sort).
+    if (initial.sort) params.set('sort', initial.sort);
+    if (initial.dir) params.set('dir', initial.dir);
     const qs = params.toString();
     router.push(`/clients/${clientId}/purchase-orders${qs ? `?${qs}` : ''}`);
   }
@@ -202,20 +213,36 @@ export function FiltersForm({
         </Field>
       </div>
 
-      <div className="mt-4 flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={clearAll}
-          className="rounded border border-seaking-border bg-white px-3 py-1.5 text-sm font-medium text-seaking-ink transition hover:bg-seaking-bg"
-        >
-          Clear
-        </button>
-        <button
-          type="submit"
-          className="rounded bg-seaking-navy px-3 py-1.5 text-sm font-medium text-white transition hover:bg-seaking-navy-hover"
-        >
-          Apply
-        </button>
+      <div className="mt-4 flex flex-wrap items-end justify-between gap-2">
+        <Field label="Rows per page">
+          <select
+            value={pageSize}
+            onChange={(e) => setPageSize(e.target.value)}
+            className="rounded border border-seaking-border bg-white px-2 py-1.5 text-sm outline-none focus:border-seaking-navy"
+          >
+            {pageSizeOptions.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={clearAll}
+            className="rounded border border-seaking-border bg-white px-3 py-1.5 text-sm font-medium text-seaking-ink transition hover:bg-seaking-bg"
+          >
+            Clear
+          </button>
+          <button
+            type="submit"
+            className="rounded bg-seaking-navy px-3 py-1.5 text-sm font-medium text-white transition hover:bg-seaking-navy-hover"
+          >
+            Apply
+          </button>
+        </div>
       </div>
     </form>
   );
