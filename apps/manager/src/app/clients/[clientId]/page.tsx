@@ -106,13 +106,79 @@ export default async function ClientDashboardPage({ params }: PageProps) {
         </div>
       )}
 
-      <section className="rounded-lg border border-dashed border-seaking-border bg-seaking-surface p-10 text-center">
-        <p className="text-sm text-seaking-muted">Main Interface — coming in Phase 1C.</p>
-        <p className="mt-2 text-xs text-seaking-muted">
-          Borrowing base metrics, principal outstanding, and action buttons will appear here once
-          PO ingestion lands.
-        </p>
+      {/* Main Interface actions. Most are stubs that land in their respective
+          phases; PO Upload is live as of Phase 1C. */}
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <ActionCard
+          title="Purchase Order Upload"
+          description="Upload Walmart SupplierOne or Generic CSV PO data."
+          href={`/clients/${c.id}/po-uploads/new`}
+          phase="1C"
+          live
+        />
+        <ActionCard
+          title="Purchase Orders"
+          description="Browse every PO on file for this Client with filters."
+          href={`/clients/${c.id}/purchase-orders`}
+          phase="1C"
+        />
+        <ActionCard title="Advance on Purchase Orders" phase="1D" />
+        <ActionCard title="Invoice Upload" phase="1E" />
+        <ActionCard title="Advance on Accounts Receivable" phase="1E" />
+        <ActionCard title="Pre-Advance on Accounts Receivable" phase="1E" />
+        <ActionCard title="Record a Payment" phase="1F" />
+        <ActionCard title="Record a Remittance" phase="1F" />
+        <ActionCard title="Advances in Bad Standing" phase="1G" />
+        <ActionCard title="Advance Requests" phase="1B" />
+        <ActionCard title="Reports & Exports" phase="1H" />
       </section>
+
+      <p className="mt-6 text-xs text-seaking-muted">
+        Borrowing-base metrics and principal-outstanding dashboard land in Phase 1D once advances
+        are wired through the event log.
+      </p>
     </main>
   );
+}
+
+interface ActionCardProps {
+  title: string;
+  description?: string;
+  href?: string;
+  phase: string;
+  live?: boolean;
+}
+
+function ActionCard({ title, description, href, phase, live }: ActionCardProps) {
+  const inner = (
+    <div
+      className={
+        live
+          ? 'flex h-full flex-col rounded-lg border border-seaking-border bg-seaking-surface p-4 transition hover:border-seaking-navy hover:shadow-sm'
+          : 'flex h-full flex-col rounded-lg border border-dashed border-seaking-border bg-seaking-bg p-4 opacity-70'
+      }
+    >
+      <div className="flex items-start justify-between">
+        <div className="font-medium">{title}</div>
+        <span
+          className={
+            live
+              ? 'rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-seaking-success'
+              : 'rounded bg-gray-200 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-seaking-muted'
+          }
+        >
+          {live ? 'ready' : `phase ${phase}`}
+        </span>
+      </div>
+      {description && <p className="mt-1 text-xs text-seaking-muted">{description}</p>}
+    </div>
+  );
+  if (live && href) {
+    return (
+      <Link href={href} className="block">
+        {inner}
+      </Link>
+    );
+  }
+  return inner;
 }

@@ -12,9 +12,16 @@ const config: NextConfig = {
     '@seaking/ui',
     '@seaking/validators',
     '@seaking/notifications',
+    '@seaking/retailer-parsers',
   ],
   experimental: {
-    // serverActions are enabled by default in Next 15; no config needed.
+    // PO and invoice CSV uploads hit ~1-2 MB routinely. Bump the default
+    // Server Action body-size limit from 1 MB. 50 MB matches the Storage
+    // bucket file size limit (migration 0015) so anything Storage accepts
+    // also fits through the action layer.
+    serverActions: {
+      bodySizeLimit: '50mb',
+    },
   },
 };
 

@@ -99,12 +99,18 @@ importers:
       '@seaking/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@seaking/dates':
+        specifier: workspace:*
+        version: link:../../packages/dates
       '@seaking/db':
         specifier: workspace:*
         version: link:../../packages/db
       '@seaking/money':
         specifier: workspace:*
         version: link:../../packages/money
+      '@seaking/retailer-parsers':
+        specifier: workspace:*
+        version: link:../../packages/retailer-parsers
       '@seaking/ui':
         specifier: workspace:*
         version: link:../../packages/ui
