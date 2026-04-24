@@ -1,0 +1,118 @@
+import { createSupabaseServerClient, getCurrentAuthUser } from '@seaking/auth/server';
+import { isAdminManager, isManager } from '@seaking/auth';
+import { notFound, redirect } from 'next/navigation';
+import Link from 'next/link';
+
+interface PageProps {
+  params: Promise<{ clientId: string }>;
+}
+
+export default async function ClientDashboardPage({ params }: PageProps) {
+  const user = await getCurrentAuthUser();
+  if (!user) redirect('/login');
+  if (!isManager(user.role)) redirect('/login?reason=wrong_app');
+
+  const { clientId } = await params;
+  const supabase = await createSupabaseServerClient();
+
+  const { data: client, error } = await supabase
+    .from('clients')
+    .select('id, legal_name, display_name, status, over_advanced_state, version')
+    .eq('id', clientId)
+    .maybeSingle();
+
+  if (error || !client) notFound();
+
+  // rule_sets is the per-client fee + borrowing-base + payment-allocation
+  // snapshot. The "current" one is the row with effective_to IS NULL.
+  const { data: currentRuleSet } = await supabase
+    .from('rule_sets')
+    .select(
+      'id, effective_from, period_1_days, period_1_fee_rate_bps, period_2_days, period_2_fee_rate_bps, subsequent_period_days, subsequent_period_fee_rate_bps, po_advance_rate_bps, ar_advance_rate_bps, pre_advance_rate_bps, ar_aged_out_days, payment_allocation_principal_bps, payment_allocation_fee_bps',
+    )
+    .eq('client_id', clientId)
+    .is('effective_to', null)
+    .maybeSingle();
+
+  const c = client as {
+    id: string;
+    legal_name: string;
+    display_name: string;
+    status: 'active' | 'inactive' | 'paused';
+    over_advanced_state: boolean;
+    version: number;
+  };
+
+  const canEdit = isAdminManager(user.role);
+
+  return (
+    <main className="mx-auto max-w-5xl p-6">
+      <header className="mb-6">
+        <Link
+          href="/clients"
+          className="text-sm text-seaking-muted hover:text-seaking-ink hover:underline"
+        >
+          ← All Clients
+        </Link>
+        <div className="mt-2 flex items-start justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight text-seaking-navy">
+              {c.display_name}
+            </h1>
+            <p className="text-sm text-seaking-muted">
+              <span className="font-mono text-[10px] uppercase tracking-wider">{c.status}</span>
+              {c.legal_name !== c.display_name && <span> · {c.legal_name}</span>}
+              {c.over_advanced_state && (
+                <span className="ml-2 rounded bg-red-100 px-1.5 py-0.5 text-[10px] font-medium text-seaking-danger">
+                  Over Advanced
+                </span>
+              )}
+            </p>
+          </div>
+          {canEdit && (
+            <div className="flex items-center gap-2">
+              <Link
+                href={`/clients/${c.id}/rules`}
+                className="rounded border border-seaking-border bg-white px-3 py-1.5 text-sm font-medium text-seaking-ink transition hover:bg-seaking-bg"
+              >
+                {currentRuleSet ? 'Edit rules' : 'Set rules'}
+              </Link>
+              <Link
+                href={`/clients/${c.id}/edit`}
+                className="rounded border border-seaking-border bg-white px-3 py-1.5 text-sm font-medium text-seaking-ink transition hover:bg-seaking-bg"
+              >
+                Edit Client
+              </Link>
+            </div>
+          )}
+        </div>
+      </header>
+
+      {!currentRuleSet && (
+        <div className="mb-6 rounded border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <strong>No rule set configured.</strong> Before any advance can be committed, set the
+          borrowing base and fee rules for this Client.
+          {canEdit && (
+            <>
+              {' '}
+              <Link
+                href={`/clients/${c.id}/rules`}
+                className="font-medium underline hover:no-underline"
+              >
+                Configure now →
+              </Link>
+            </>
+          )}
+        </div>
+      )}
+
+      <section className="rounded-lg border border-dashed border-seaking-border bg-seaking-surface p-10 text-center">
+        <p className="text-sm text-seaking-muted">Main Interface — coming in Phase 1C.</p>
+        <p className="mt-2 text-xs text-seaking-muted">
+          Borrowing base metrics, principal outstanding, and action buttons will appear here once
+          PO ingestion lands.
+        </p>
+      </section>
+    </main>
+  );
+}
