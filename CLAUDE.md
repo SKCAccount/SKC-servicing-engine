@@ -2,7 +2,13 @@
 
 This is the top-level `CLAUDE.md` read by every Claude Code session. It holds the invariants, conventions, and pointers you need to orient in any file.
 
-**Read the per-package `README.md` before editing inside that package.** Those have domain-specific context that changes more often than this file.
+**Read in this order when starting a session:**
+1. This file (`CLAUDE.md`) — invariants, conventions, reading order
+2. [`ARCHITECTURE.md`](./ARCHITECTURE.md) — module layering, auth flow, data flow, patterns for common tasks
+3. The relevant package's `README.md` before editing inside that package
+4. The git log (`git log --oneline -30`) to see what's been shipped recently
+
+When the user's ask is ambiguous, prefer asking before assuming. Every ambiguity silently resolved is a future bug.
 
 ---
 
@@ -110,6 +116,33 @@ pnpm db:push         # apply local migrations to linked project
 pnpm db:types        # regenerate packages/db/src/types.ts
 ```
 
+### Supabase dashboard configuration (NOT in code)
+
+Some settings live only in the Supabase project dashboard and must be applied manually in each environment:
+
+**Authentication → URL Configuration**
+- **Site URL**: canonical production URL of the Manager app (localhost:3000 for dev)
+- **Redirect URLs** (allowlist — add one per environment):
+  - `http://localhost:3000/auth/callback`
+  - `http://localhost:3001/auth/callback`
+  - production equivalents when deployed
+
+**Authentication → Email Templates** (optional but recommended)
+- Default templates use `{{ .ConfirmationURL }}` which routes through Supabase's `/auth/v1/verify` endpoint. That works with our unified `/auth/callback` handler. No template changes required.
+
+Without the redirect allowlist, `inviteUserByEmail` and `resetPasswordForEmail` both fail silently (Supabase refuses to embed a non-allowlisted `redirectTo`).
+
+---
+
+## What's shipped (as of Phase 1B)
+
+See `git log --oneline` for the canonical history. Summary:
+
+- **Phase 1A** (commits `97807f0` …): monorepo scaffold, 14 migrations, money + dates + validators packages, login + empty Client Selection.
+- **Phase 1B** (commits through `7400932`+): completed auth (invite + password reset), Client CRUD (admin-only), Set Borrowing Base and Fee Rules (`/clients/[id]/rules`, RPC `upsert_rule_set`), user invitation flow (`/users`, `/users/new`, `/users/[id]`).
+
+Coming in Phase 1C: Walmart PO parser, PO upload UI, PO list view. See `docs/BUILD_PROMPT.md` §5.
+
 ---
 
 ## Commit conventions
@@ -130,6 +163,7 @@ Small, focused commits. Derek reads the git log.
 
 | Source material | Path |
 |---|---|
+| Architecture overview (read second) | `ARCHITECTURE.md` |
 | Build prompt (orientation) | `docs/BUILD_PROMPT.md` |
 | Functional spec (canonical behavior) | `docs/01_FUNCTIONAL_SPEC.md` |
 | Schema narrative | `docs/02_SCHEMA.md` |
