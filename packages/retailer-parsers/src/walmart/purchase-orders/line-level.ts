@@ -142,6 +142,7 @@ export function parseWalmartPoLineLevel(input: ParserInput): ParseResult<Normali
         : { cancellation_reason_category: null, cancellation_memo: null };
 
     poRows.push({
+      retailer_slug: 'walmart',
       po_number,
       po_value_cents: header.po_value_cents,
       issuance_date: header.issuance_date,

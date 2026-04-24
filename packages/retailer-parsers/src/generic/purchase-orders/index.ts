@@ -10,6 +10,10 @@
  *
  * Template columns (case-insensitive, whitespace collapsed):
  *
+ *   Retailer                    REQUIRED — must match a registered retailer's
+ *                                          name or display_name (case-insensitive).
+ *                                          One generic upload may span multiple
+ *                                          retailers.
  *   PO Number                   REQUIRED — any non-empty string
  *   PO Value                    REQUIRED — dollars like "1,234.56" or "$1,234.56"
  *   Issuance Date               optional — ISO YYYY-MM-DD or MM/DD/YYYY
@@ -53,12 +57,13 @@ import { parseCsv, cell, canonicalizeHeader } from '../../csv';
 import { parseUsSlashDate } from '../../dates';
 import { parseDollarCents, parseInteger } from '../../walmart/shared';
 
-export const PARSER_VERSION = 'generic-po/1.0.0';
+export const PARSER_VERSION = 'generic-po/1.1.0';
 
-const REQUIRED_COLUMNS: readonly string[] = ['PO Number', 'PO Value'];
+const REQUIRED_COLUMNS: readonly string[] = ['Retailer', 'PO Number', 'PO Value'];
 
 /** Canonical column map: lowercase-canonical → display canonical form. */
 const KNOWN_COLUMNS: Record<string, string> = {
+  retailer: 'Retailer',
   'po number': 'PO Number',
   'po value': 'PO Value',
   'issuance date': 'Issuance Date',
@@ -142,6 +147,23 @@ export function parseGenericPurchaseOrders(input: ParserInput): ParseResult<Norm
       const v = raw[src];
       if (v !== undefined) row[dst] = v;
     }
+
+    // Retailer is required on every row (spec §Purchase Order Upload Tool).
+    // We normalize to a trimmed lowercase 'slug' the upload handler will
+    // match case-insensitively against retailers.name OR display_name.
+    // Unknown slugs aren't the parser's problem — that's a DB concern, so
+    // we pass the slug through and let the commit handler skip rows whose
+    // retailer doesn't resolve. Here we only enforce non-empty.
+    const retailerRaw = cell(row['Retailer']);
+    if (!retailerRaw) {
+      skipped.push({
+        row_index: i,
+        reason: 'missing_retailer',
+        raw: { 'Retailer': row['Retailer'] ?? null, 'PO Number': row['PO Number'] ?? null },
+      });
+      continue;
+    }
+    const retailer_slug = retailerRaw.trim().toLowerCase();
 
     const po_number = cell(row['PO Number']);
     if (!po_number) {
@@ -233,6 +255,7 @@ export function parseGenericPurchaseOrders(input: ParserInput): ParseResult<Norm
         : { cancellation_reason_category: null, cancellation_memo: null };
 
     rows.push({
+      retailer_slug,
       po_number,
       po_value_cents,
       issuance_date,
@@ -269,4 +292,4 @@ export function parseGenericPurchaseOrders(input: ParserInput): ParseResult<Norm
  * the headers the parser understands.
  */
 export const GENERIC_PO_TEMPLATE_HEADER =
-  'PO Number,PO Value,Issuance Date,Requested Delivery Date,Delivery Location,Item Description,Quantity Ordered,Unit Value,Cancellation Status,Cancellation Reason';
+  'Retailer,PO Number,PO Value,Issuance Date,Requested Delivery Date,Delivery Location,Item Description,Quantity Ordered,Unit Value,Cancellation Status,Cancellation Reason';

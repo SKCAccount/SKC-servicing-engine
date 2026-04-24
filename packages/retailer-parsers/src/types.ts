@@ -64,6 +64,20 @@ export type PoStatus =
 
 /** Normalized purchase-order record emitted by any PO parser. */
 export interface NormalizedPoRecord {
+  /**
+   * Retailer slug (matches `retailers.name`, lowercase, e.g. 'walmart').
+   * Retailer-specific parsers (Walmart, Kroger) set this to their own slug
+   * because the retailer is implied by the parser choice. The Generic CSV
+   * parser REQUIRES a 'Retailer' column on every row and writes the
+   * (case-normalized) value here — a single generic upload can span
+   * multiple retailers.
+   *
+   * The upload handler resolves this slug to a retailer_id (matching
+   * retailers.name OR retailers.display_name case-insensitively) before
+   * persisting. Rows whose slug doesn't resolve are surfaced as skipped
+   * with reason 'unknown_retailer' in the upload review UI.
+   */
+  retailer_slug: string;
   /** Retailer's PO # (string to preserve any leading zeros). */
   po_number: string;
   /** Per 02_SCHEMA.md — canonical PO value in integer cents. */

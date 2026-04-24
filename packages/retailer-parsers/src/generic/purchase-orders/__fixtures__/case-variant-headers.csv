@@ -1,2 +1,2 @@
-po NUMBER,Po Value,ISSUANCE DATE,Requested Delivery Date,delivery location,Item description,QUANTITY ORDERED,unit value,Cancellation Status,Cancellation Reason
-SK-A,"100.00",2026-04-01,2026-04-10,Wx,Widget,5,20.00,,
+retailer,po NUMBER,Po Value,ISSUANCE DATE,Requested Delivery Date,delivery location,Item description,QUANTITY ORDERED,unit value,Cancellation Status,Cancellation Reason
+TARGET,SK-A,"100.00",2026-04-01,2026-04-10,Wx,Widget,5,20.00,,

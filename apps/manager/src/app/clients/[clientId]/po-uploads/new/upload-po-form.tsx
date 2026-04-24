@@ -109,7 +109,7 @@ export function UploadPoForm({ clientId }: { clientId: string }) {
     <form onSubmit={onPreview} className="space-y-5">
       <div>
         <label htmlFor="retailer" className="mb-1 block text-sm font-medium">
-          Retailer
+          Upload format
         </label>
         <select
           id="retailer"
@@ -117,10 +117,17 @@ export function UploadPoForm({ clientId }: { clientId: string }) {
           onChange={(e) => setRetailer(e.target.value as RetailerSlug)}
           className="w-full rounded border border-seaking-border bg-white px-3 py-2 text-sm outline-none focus:border-seaking-navy"
         >
-          <option value="walmart">Walmart (SupplierOne)</option>
-          <option value="kroger">Kroger</option>
-          <option value="generic">Generic CSV template</option>
+          <option value="walmart">Walmart (SupplierOne) — all rows attributed to Walmart</option>
+          <option value="kroger">Kroger — all rows attributed to Kroger</option>
+          <option value="generic">Generic CSV template — retailer specified per row</option>
         </select>
+        {retailer === 'generic' && (
+          <p className="mt-1 text-xs text-seaking-muted">
+            Each row must carry a <code>Retailer</code> value that matches a registered retailer.
+            Rows whose retailer isn&apos;t registered will be skipped in the preview. An Admin
+            Manager can register new retailers in Supabase Studio (Phase 2 adds a UI for this).
+          </p>
+        )}
       </div>
 
       <div>

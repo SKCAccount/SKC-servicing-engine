@@ -2,10 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import {
-  GENERIC_PO_TEMPLATE_HEADER,
-  parseGenericPurchaseOrders,
-} from './index';
+import { GENERIC_PO_TEMPLATE_HEADER, parseGenericPurchaseOrders } from './index';
 
 const here = dirname(fileURLToPath(import.meta.url));
 function loadFixture(name: string): string {
@@ -13,15 +10,15 @@ function loadFixture(name: string): string {
 }
 
 describe('GENERIC_PO_TEMPLATE_HEADER', () => {
-  it('lists the expected columns in the documented order', () => {
+  it('lists the expected columns in the documented order (Retailer first)', () => {
     expect(GENERIC_PO_TEMPLATE_HEADER).toBe(
-      'PO Number,PO Value,Issuance Date,Requested Delivery Date,Delivery Location,' +
+      'Retailer,PO Number,PO Value,Issuance Date,Requested Delivery Date,Delivery Location,' +
         'Item Description,Quantity Ordered,Unit Value,Cancellation Status,Cancellation Reason',
     );
   });
 });
 
-describe('parseGenericPurchaseOrders — happy path', () => {
+describe('parseGenericPurchaseOrders — happy path (multi-retailer file)', () => {
   const csv = loadFixture('happy-path.csv');
   const result = parseGenericPurchaseOrders(csv);
 
@@ -29,6 +26,24 @@ describe('parseGenericPurchaseOrders — happy path', () => {
     expect(result.rows.length).toBe(5);
     expect(result.stats.valid_rows).toBe(5);
     expect(result.stats.skipped_rows).toBe(0);
+  });
+
+  it('normalizes retailer values to lowercase slugs', () => {
+    const byNumber = new Map(result.rows.map((r) => [r.po_number, r]));
+    // Fixture has "Target", "target", "COSTCO", "Target", "BJs"
+    expect(byNumber.get('SK-0001')!.retailer_slug).toBe('target');
+    expect(byNumber.get('SK-0002')!.retailer_slug).toBe('target');
+    expect(byNumber.get('SK-0003')!.retailer_slug).toBe('costco');
+    expect(byNumber.get('SK-0004')!.retailer_slug).toBe('target');
+    expect(byNumber.get('SK-0005')!.retailer_slug).toBe('bjs');
+  });
+
+  it('preserves multi-retailer identity on each row', () => {
+    const uniqueRetailers = new Set(result.rows.map((r) => r.retailer_slug));
+    expect(uniqueRetailers.size).toBe(3);
+    expect(uniqueRetailers).toContain('target');
+    expect(uniqueRetailers).toContain('costco');
+    expect(uniqueRetailers).toContain('bjs');
   });
 
   it('parses PO values as integer cents', () => {
@@ -42,9 +57,7 @@ describe('parseGenericPurchaseOrders — happy path', () => {
 
   it('accepts both ISO and MM/DD/YYYY dates', () => {
     const byNumber = new Map(result.rows.map((r) => [r.po_number, r]));
-    // SK-0001 used ISO
     expect(byNumber.get('SK-0001')!.issuance_date).toBe('2026-04-15');
-    // SK-0002 used US slash
     expect(byNumber.get('SK-0002')!.issuance_date).toBe('2026-04-15');
   });
 
@@ -72,7 +85,7 @@ describe('parseGenericPurchaseOrders — happy path', () => {
     }
   });
 
-  it('does not warn when Quantity × Unit Value matches PO Value', () => {
+  it('warns when Quantity × Unit Value disagrees with PO Value', () => {
     // SK-0001: 12 × $102.88 = $1,234.56 — no variance
     // SK-0002: 10 × $50.00 = $500.00 — no variance
     // SK-0005: 10 × $95.00 = $950.00 vs PO Value $1000.00 — WARNS
@@ -88,25 +101,31 @@ describe('parseGenericPurchaseOrders — happy path', () => {
     expect(r1.unit_value_cents).toBe(10288);
   });
 
-  it('parser_version reflects generic-po/1.0.0', () => {
-    expect(result.parser_version).toBe('generic-po/1.0.0');
+  it('parser_version reflects generic-po/1.1.0 (Retailer column change)', () => {
+    expect(result.parser_version).toBe('generic-po/1.1.0');
   });
 });
 
 describe('parseGenericPurchaseOrders — case-insensitive headers', () => {
-  it('accepts headers like "po NUMBER" and "Po Value"', () => {
+  it('accepts all column names in any case', () => {
     const csv = loadFixture('case-variant-headers.csv');
     const result = parseGenericPurchaseOrders(csv);
     expect(result.stats.valid_rows).toBe(1);
-    expect(result.rows[0]!.po_number).toBe('SK-A');
-    expect(result.rows[0]!.po_value_cents).toBe(10000);
-    expect(result.rows[0]!.issuance_date).toBe('2026-04-01');
+    const r = result.rows[0]!;
+    expect(r.retailer_slug).toBe('target');
+    expect(r.po_number).toBe('SK-A');
+    expect(r.po_value_cents).toBe(10000);
+    expect(r.issuance_date).toBe('2026-04-01');
   });
 });
 
 describe('parseGenericPurchaseOrders — malformed rows', () => {
   const csv = loadFixture('malformed.csv');
   const result = parseGenericPurchaseOrders(csv);
+
+  it('skips rows missing Retailer', () => {
+    expect(result.skipped.some((s) => s.reason === 'missing_retailer')).toBe(true);
+  });
 
   it('skips rows missing PO Number', () => {
     expect(result.skipped.some((s) => s.reason === 'missing_po_number')).toBe(true);
@@ -125,21 +144,22 @@ describe('parseGenericPurchaseOrders — malformed rows', () => {
   });
 
   it('skips rows whose PO Value is unparseable', () => {
-    // SK-103 had "not a number" in PO Value
     const poNumbers = result.rows.map((r) => r.po_number);
     expect(poNumbers).not.toContain('SK-103');
   });
 
   it('stats reflect the skips', () => {
-    expect(result.stats.total_rows_read).toBe(5);
+    expect(result.stats.total_rows_read).toBe(6);
     expect(result.stats.valid_rows).toBe(0);
-    expect(result.stats.skipped_rows).toBe(5);
+    expect(result.stats.skipped_rows).toBe(6);
   });
 });
 
 describe('parseGenericPurchaseOrders — missing required column', () => {
-  it('throws with a clear message listing observed columns', () => {
+  it('throws with a clear message when Retailer/PO Value are absent', () => {
     const csv = loadFixture('missing-required-column.csv');
-    expect(() => parseGenericPurchaseOrders(csv)).toThrow(/missing required column "PO Value"/);
+    // Parser iterates REQUIRED_COLUMNS in order [Retailer, PO Number, PO Value]
+    // and throws on the first missing one, so "Retailer" surfaces first.
+    expect(() => parseGenericPurchaseOrders(csv)).toThrow(/missing required column "Retailer"/);
   });
 });
