@@ -77,9 +77,12 @@ CREATE TRIGGER trg_po_lines_updated_at BEFORE UPDATE ON purchase_order_lines
 
 -- ---------- Audit trigger ----------
 -- Extracts client_id via parent PO for audit_log filtering.
+-- See 0006 for the SECURITY DEFINER + search_path rationale.
 CREATE OR REPLACE FUNCTION log_po_line_change()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
   v_client_id uuid;

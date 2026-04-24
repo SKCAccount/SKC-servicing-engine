@@ -24,9 +24,21 @@ CREATE INDEX idx_audit_log_changed_by ON audit_log(changed_by) WHERE changed_by 
 
 -- ---------- Audit trigger function ----------
 -- Extracts client_id from the row if it has one, so RLS can filter audit rows per-Client.
+--
+-- SECURITY DEFINER is required: audit_log has RLS enabled with NO insert
+-- policy (writes are trigger-populated only). Without SECURITY DEFINER, the
+-- trigger would run as the caller and their INSERT into audit_log would be
+-- blocked by RLS. Running as the owning role (supabase postgres) lets the
+-- trigger bypass RLS just for the audit write.
+--
+-- SET search_path = public locks the function's relation resolution so it
+-- can't be hijacked by a caller with a mutable search_path (a standard
+-- SECURITY DEFINER hardening step).
 CREATE OR REPLACE FUNCTION log_reference_change()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
 AS $$
 DECLARE
   v_client_id uuid;
