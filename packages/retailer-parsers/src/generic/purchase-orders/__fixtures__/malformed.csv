@@ -1,0 +1,6 @@
+PO Number,PO Value,Issuance Date,Requested Delivery Date,Delivery Location,Item Description,Quantity Ordered,Unit Value,Cancellation Status,Cancellation Reason
+,"100.00",2026-04-01,,,,,,,
+SK-100,,2026-04-01,,,,,,,
+SK-101,"100.00",2026-04-01,,,,,,cancelled,
+SK-102,"100.00",2026-04-01,,,,,,bizarro,
+SK-103,"not a number",2026-04-01,,,,,,,

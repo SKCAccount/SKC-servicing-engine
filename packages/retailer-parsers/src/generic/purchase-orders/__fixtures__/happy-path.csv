@@ -1,0 +1,6 @@
+PO Number,PO Value,Issuance Date,Requested Delivery Date,Delivery Location,Item Description,Quantity Ordered,Unit Value,Cancellation Status,Cancellation Reason
+SK-0001,"$1,234.56",2026-04-15,2026-04-30,"Warehouse A","Premium widgets",12,102.88,,
+SK-0002,500.00,04/15/2026,05/01/2026,"Warehouse B","Standard widgets",10,50.00,active,
+SK-0003,"$2,000.00",2026-04-10,2026-04-25,"Warehouse C","Discontinued line",,,cancelled,"Retailer ended the program"
+SK-0004,750.00,,,,,,,partial-cancel,
+SK-0005,"$1,000.00",2026-04-20,2026-05-10,,"Variance check",10,"$95.00",,
