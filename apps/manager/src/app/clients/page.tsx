@@ -43,6 +43,12 @@ export default async function ClientsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Link
+            href="/users"
+            className="rounded border border-seaking-border bg-white px-3 py-1.5 text-sm font-medium text-seaking-ink transition hover:bg-seaking-bg"
+          >
+            Users
+          </Link>
           {canCreate && (
             <Link
               href="/clients/new"
