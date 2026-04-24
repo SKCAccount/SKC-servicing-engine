@@ -430,6 +430,7 @@ export async function commitPoUploadAction(
     }
   }
 
+  let groupsCommitted = 0;
   for (const [retailerId, rows] of groups) {
     const poJson = rows.map((r) => normalizePoForRpc(r));
     const groupPoNumbers = new Set(rows.map((r) => r.po_number));
@@ -454,14 +455,30 @@ export async function commitPoUploadAction(
       },
     );
     if (rpcError) {
-      // Best-effort cleanup. Already-committed groups stay committed; they're
-      // atomic per-retailer. We leave the po_uploads row in place so the
-      // partial success is auditable.
+      // Cleanup strategy depends on whether anything has committed yet:
+      //  - groupsCommitted == 0 → roll back po_uploads + Storage so the
+      //    user doesn't have an orphan upload record pointing at a file
+      //    with zero rows persisted. Clean failure: nothing left behind.
+      //  - groupsCommitted > 0 → leave everything in place. Some groups
+      //    succeeded (each in its own atomic txn); the partial state is
+      //    real and the Manager needs to see it.
+      if (groupsCommitted === 0) {
+        await admin.from('po_uploads').delete().eq('id', uploadId);
+        await admin.storage.from('po-uploads').remove([storagePath]);
+        return supabaseError({
+          message: `Upload failed: ${rpcError.message}`,
+          code: rpcError.code,
+        });
+      }
       return supabaseError({
-        message: `Group write failed for one retailer (${rows.length} rows). ${rpcError.message} Earlier retailer groups in this upload have already committed.`,
+        message:
+          `Upload PARTIALLY committed: ${groupsCommitted} of ${groups.size} retailer ` +
+          `groups succeeded. The current group (${rows.length} rows) failed: ${rpcError.message}. ` +
+          `Already-committed groups remain in place; check the Purchase Orders list to see what landed.`,
         code: rpcError.code,
       });
     }
+    groupsCommitted += 1;
     const c = rpcResult as typeof totals;
     totals.inserted += c.inserted;
     totals.updated += c.updated;

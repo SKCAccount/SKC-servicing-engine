@@ -117,7 +117,22 @@ export function parsePoNumber(raw: string | null): string | null {
 
 /**
  * Cross-check: Supply chain status vs OMS status.
- * In Derek's sample they agreed on every row; mismatch emits a warning.
+ *
+ * The two columns use different vocabularies that overlap loosely. A row
+ * where Supply chain = 'Closed' and OMS = 'Closed' is consistent — both
+ * sides agree the PO is closed. Same for 'Cancelled'/'Cancelled'.
+ *
+ * Initial implementation only treated OMS = 'Active' as active-like, which
+ * tripped a false-positive warning on every Closed/Closed row (and there
+ * are thousands in real data). Now we bucket both sides into
+ * 'active-like' vs 'cancelled-like' and only warn when the buckets differ.
+ *
+ * - active-like: { Open, Receiving, Closed, Active }
+ * - cancelled-like: { Cancelled }
+ *
+ * Anything not in either bucket is treated as unknown and gets a warning
+ * because Walmart introducing a new status value is something the Manager
+ * should see.
  */
 export function crossCheckOmsStatus(
   supplyChain: string | null,
@@ -125,13 +140,24 @@ export function crossCheckOmsStatus(
   rowIndex: number,
 ): ParseWarning | null {
   if (!supplyChain || !oms) return null;
-  // OMS uses different strings — Active/Cancelled correspond to
-  // Open+Receiving+Closed / Cancelled respectively.
   const sc = supplyChain.trim();
   const o = oms.trim();
-  const scIsActiveLike = sc === 'Open' || sc === 'Receiving' || sc === 'Closed';
-  const oIsActive = o === 'Active';
-  if ((scIsActiveLike && !oIsActive) || (sc === 'Cancelled' && oIsActive)) {
+
+  type Bucket = 'active' | 'cancelled' | 'unknown';
+  const bucket = (v: string): Bucket => {
+    if (v === 'Open' || v === 'Receiving' || v === 'Closed' || v === 'Active') return 'active';
+    if (v === 'Cancelled') return 'cancelled';
+    return 'unknown';
+  };
+
+  const scBucket = bucket(sc);
+  const oBucket = bucket(o);
+
+  // Same semantic bucket → no warning. Closed/Closed, Active/Open, Cancelled/Cancelled all pass.
+  if (scBucket === oBucket && scBucket !== 'unknown') return null;
+
+  // Otherwise warn — they really do disagree, OR one side is an unknown value.
+  if (scBucket !== oBucket || scBucket === 'unknown' || oBucket === 'unknown') {
     return {
       row_index: rowIndex,
       code: 'walmart_status_mismatch',
