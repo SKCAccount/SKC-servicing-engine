@@ -13,7 +13,8 @@
     "./kroger/purchase-orders": "./src/kroger/purchase-orders/index.ts",
     "./kroger/invoices": "./src/kroger/invoices/index.ts",
     "./kroger/payments": "./src/kroger/payments/index.ts",
-    "./generic/purchase-orders": "./src/generic/purchase-orders/index.ts"
+    "./generic/purchase-orders": "./src/generic/purchase-orders/index.ts",
+    "./advance-csv/po-numbers": "./src/advance-csv/po-numbers/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

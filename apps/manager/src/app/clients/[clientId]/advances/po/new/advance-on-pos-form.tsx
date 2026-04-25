@@ -40,7 +40,9 @@ import {
   commitPoAdvanceAction,
   fetchAllMatchingPoIdsAction,
   type FetchMatchingPosFilter,
+  type MatchingPoSummary,
 } from './actions';
+import { CsvUpload } from './csv-upload';
 
 export interface CandidatePo {
   id: string;
@@ -408,6 +410,22 @@ export function AdvanceOnPosForm(props: Props) {
       {/* ---------- Section 1: Select POs ---------- */}
       <section>
         <SectionHeader number={1} title="Select Purchase Orders" />
+
+        <div className="mb-3">
+          <CsvUpload
+            clientId={clientId}
+            onAddMatches={(rows: MatchingPoSummary[]) => {
+              setSelected((prev) => {
+                const next = new Map(prev);
+                for (const r of rows) {
+                  // MatchingPoSummary is shape-compatible with CandidatePo.
+                  next.set(r.id, r as CandidatePo);
+                }
+                return next;
+              });
+            }}
+          />
+        </div>
 
         <FilterForm
           retailers={retailers}

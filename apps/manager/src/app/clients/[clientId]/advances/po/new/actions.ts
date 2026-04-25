@@ -3,16 +3,24 @@
 /**
  * Server actions for the 'Advance on Purchase Orders' workflow.
  *
- * Three actions:
- *   1. fetchPoAdvanceContextAction — currently unused; reserved for the
- *      CSV-of-PO-numbers secondary entry path.
+ * Four actions:
+ *   1. fetchPoAdvanceContextAction — pull the full per-PO context (value,
+ *      principal, batch, retailer label) for an arbitrary id list. Used by
+ *      the CSV-of-PO-numbers secondary entry path after matchPosFromCsv
+ *      resolves the (po_number, retailer) tuples to ids.
  *
  *   2. fetchAllMatchingPoIdsAction — runs the same filter query the page
  *      runs (without pagination) and returns up to `hardLimit` PO summary
  *      rows so the UI can let the Manager 'Select all matches' even when
  *      they span multiple pages.
  *
- *   3. commitPoAdvanceAction — given the planned allocation + advance date +
+ *   3. matchPosFromCsvAction — parses an uploaded two-column CSV
+ *      (Purchase Order Number, Retailer) and returns matched rows
+ *      (resolved against existing eligible POs) plus unmatched rows the
+ *      UI can offer to re-export. Spec §"Advancing Purchase Orders"
+ *      → Secondary Option.
+ *
+ *   4. commitPoAdvanceAction — given the planned allocation + advance date +
  *      batch choice, call the commit_po_advance RPC, then refresh
  *      projections so the dashboards see the new advance immediately.
  *
@@ -461,5 +469,244 @@ export async function fetchAllMatchingPoIdsAction(
     pos,
     truncated: total > hardLimit,
     totalCount: total,
+  });
+}
+
+// ============================================================================
+// matchPosFromCsvAction
+// ============================================================================
+//
+// Spec: §"Advancing Purchase Orders" → Secondary Option. Manager (or, in
+// future, the Client portal) uploads a two-column CSV (Purchase Order
+// Number, Retailer) listing POs they want to advance against. The action
+// parses the CSV via @seaking/retailer-parsers/advance-csv/po-numbers,
+// resolves each (po_number, retailer_slug) tuple to a real PO id, and
+// returns:
+//
+//   * `matched`  — same shape as MatchingPoSummary; ready to add directly
+//                  to the page's selection Map.
+//   * `unmatched` — rows from the CSV that didn't resolve. UI exposes an
+//                   "Export unmatched as CSV" button so the user can take
+//                   the leftover work back to the Client / retailer.
+//   * `skipped`  — rows the parser dropped (missing fields, etc.).
+//
+// Eligibility filter mirrors the table: only active / partially_invoiced /
+// closed_awaiting_invoice POs match. Cancelled or fully-invoiced POs that
+// match the (po_number, retailer) tuple come back as unmatched with an
+// explanatory reason.
+//
+// Retailer resolution: case-insensitive against retailers.name OR
+// retailers.display_name (same convention as the generic CSV PO upload).
+
+import { parsePoNumbersCsv, PoNumbersHeaderError } from '@seaking/retailer-parsers/advance-csv/po-numbers';
+
+const MATCH_ELIGIBLE_STATUSES = ['active', 'partially_invoiced', 'closed_awaiting_invoice'] as const;
+
+export interface MatchPosCsvUnmatchedRow {
+  po_number: string;
+  retailer_input: string; // original retailer cell from the CSV (lowercased)
+  reason: 'retailer_not_found' | 'po_not_found' | 'po_not_eligible';
+  /**
+   * For po_not_eligible: which status the matched PO has, so the UI can
+   * give a useful message ("PO 12345 was matched but is fully_invoiced").
+   */
+  status?: string;
+}
+
+export async function matchPosFromCsvAction(
+  clientId: string,
+  csvText: string,
+): Promise<
+  ActionResult<{
+    matched: MatchingPoSummary[];
+    unmatched: MatchPosCsvUnmatchedRow[];
+    skipped: Array<{ row_index: number; reason: string }>;
+  }>
+> {
+  const authz = await authorize(clientId);
+  if (!authz.ok) return authz.err;
+
+  let parsed: ReturnType<typeof parsePoNumbersCsv>;
+  try {
+    parsed = parsePoNumbersCsv(csvText);
+  } catch (e) {
+    if (e instanceof PoNumbersHeaderError) {
+      return err('BAD_REQUEST', e.message);
+    }
+    return err(
+      'PARSE_FAILED',
+      e instanceof Error ? e.message : 'Could not parse the CSV.',
+    );
+  }
+
+  if (parsed.rows.length === 0 && parsed.skipped.length === 0) {
+    return err('BAD_REQUEST', 'The CSV has no data rows.');
+  }
+
+  const supabase = await createSupabaseServerClient();
+
+  // ---------- Resolve retailer slugs to retailer_ids ----------
+  // Match both retailers.name AND retailers.display_name case-insensitively.
+  // We pull every retailer (small table) and do the join in memory — avoids
+  // N round-trips and a long URL with .or() filters.
+  const { data: retailerRows, error: retailerError } = await supabase
+    .from('retailers')
+    .select('id, name, display_name');
+  if (retailerError) return supabaseError(retailerError);
+  const retailers = (retailerRows ?? []) as Array<{
+    id: string;
+    name: string;
+    display_name: string | null;
+  }>;
+  const retailerSlugToId = new Map<string, string>();
+  for (const r of retailers) {
+    const nameSlug = r.name.toLowerCase().replace(/\s+/g, ' ').trim();
+    retailerSlugToId.set(nameSlug, r.id);
+    if (r.display_name) {
+      const dnSlug = r.display_name.toLowerCase().replace(/\s+/g, ' ').trim();
+      retailerSlugToId.set(dnSlug, r.id);
+    }
+  }
+
+  // Bucket the parsed rows: those with a known retailer get a DB lookup,
+  // those without surface immediately as unmatched.
+  const unmatched: MatchPosCsvUnmatchedRow[] = [];
+  type ResolvableRow = { po_number: string; retailer_id: string; retailer_input: string };
+  const resolvable: ResolvableRow[] = [];
+  for (const row of parsed.rows) {
+    const retailerId = retailerSlugToId.get(row.retailer_slug);
+    if (!retailerId) {
+      unmatched.push({
+        po_number: row.po_number,
+        retailer_input: row.retailer_slug,
+        reason: 'retailer_not_found',
+      });
+      continue;
+    }
+    resolvable.push({
+      po_number: row.po_number,
+      retailer_id: retailerId,
+      retailer_input: row.retailer_slug,
+    });
+  }
+
+  // ---------- DB lookup: (client_id, retailer_id, po_number) is unique ----------
+  // We can't easily compose multiple OR'd compound predicates in PostgREST,
+  // so we widen the query to (retailer_id IN, po_number IN) and filter the
+  // result set in memory. Worst case: cross-product of the two sets, but
+  // typical CSV uploads have <100 rows so this is fine.
+  let matchedPoRows: Array<{
+    id: string;
+    po_number: string;
+    retailer_id: string;
+    status: string;
+    po_value_cents: number;
+    batch_id: string | null;
+    issuance_date: string | null;
+    requested_delivery_date: string | null;
+    created_at: string;
+  }> = [];
+  if (resolvable.length > 0) {
+    const retailerIdSet = new Set(resolvable.map((r) => r.retailer_id));
+    const poNumberSet = new Set(resolvable.map((r) => r.po_number));
+
+    const { data: poRows, error: poError } = await supabase
+      .from('purchase_orders')
+      .select(
+        'id, po_number, retailer_id, status, po_value_cents, batch_id, issuance_date, requested_delivery_date, created_at',
+      )
+      .eq('client_id', clientId)
+      .in('retailer_id', Array.from(retailerIdSet))
+      .in('po_number', Array.from(poNumberSet));
+    if (poError) return supabaseError(poError);
+    matchedPoRows = (poRows ?? []) as typeof matchedPoRows;
+  }
+
+  // Build lookup keyed by (po_number|retailer_id) so we can attribute each
+  // CSV row to a DB row (or absence of one).
+  const poByKey = new Map<string, (typeof matchedPoRows)[number]>();
+  for (const po of matchedPoRows) {
+    poByKey.set(`${po.po_number}|${po.retailer_id}`, po);
+  }
+
+  // Walk the resolvable rows, classify into matched / unmatched / not-eligible.
+  const matchedIds: string[] = [];
+  for (const row of resolvable) {
+    const po = poByKey.get(`${row.po_number}|${row.retailer_id}`);
+    if (!po) {
+      unmatched.push({
+        po_number: row.po_number,
+        retailer_input: row.retailer_input,
+        reason: 'po_not_found',
+      });
+      continue;
+    }
+    if (!(MATCH_ELIGIBLE_STATUSES as readonly string[]).includes(po.status)) {
+      unmatched.push({
+        po_number: row.po_number,
+        retailer_input: row.retailer_input,
+        reason: 'po_not_eligible',
+        status: po.status,
+      });
+      continue;
+    }
+    matchedIds.push(po.id);
+  }
+
+  // ---------- Fetch outstanding-principal + display labels ----------
+  const principalByPo = new Map<string, number>();
+  if (matchedIds.length > 0) {
+    const { data: balanceRows } = await supabase
+      .from('mv_advance_balances')
+      .select('purchase_order_id, principal_outstanding_cents')
+      .eq('client_id', clientId)
+      .in('purchase_order_id', matchedIds);
+    for (const row of (balanceRows ?? []) as Array<{
+      purchase_order_id: string;
+      principal_outstanding_cents: number;
+    }>) {
+      principalByPo.set(
+        row.purchase_order_id,
+        (principalByPo.get(row.purchase_order_id) ?? 0) +
+          (row.principal_outstanding_cents ?? 0),
+      );
+    }
+  }
+
+  const retailerById = new Map(retailers.map((r) => [r.id, r]));
+  const { data: batchList } = await supabase
+    .from('batches')
+    .select('id, name')
+    .eq('client_id', clientId);
+  const batchById = new Map(
+    ((batchList ?? []) as Array<{ id: string; name: string }>).map((b) => [b.id, b.name]),
+  );
+
+  const matched: MatchingPoSummary[] = matchedIds.flatMap((id) => {
+    const po = matchedPoRows.find((p) => p.id === id);
+    if (!po) return [];
+    return [
+      {
+        id: po.id,
+        po_number: po.po_number,
+        retailer_id: po.retailer_id,
+        retailer_display:
+          retailerById.get(po.retailer_id)?.display_name ?? retailerById.get(po.retailer_id)?.name ?? '?',
+        status: po.status,
+        po_value_cents: po.po_value_cents,
+        current_principal_cents: principalByPo.get(po.id) ?? 0,
+        current_batch_id: po.batch_id,
+        current_batch_label: po.batch_id ? (batchById.get(po.batch_id) ?? null) : null,
+        issuance_date: po.issuance_date,
+        requested_delivery_date: po.requested_delivery_date,
+        created_at: po.created_at,
+      },
+    ];
+  });
+
+  return ok({
+    matched,
+    unmatched,
+    skipped: parsed.skipped.map((s) => ({ row_index: s.row_index, reason: s.reason })),
   });
 }
