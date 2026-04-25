@@ -218,7 +218,7 @@ export default async function AssignToBatchPage({ params, searchParams }: PagePr
   }));
 
   return (
-    <main className="mx-auto max-w-6xl p-6">
+    <main className="mx-auto max-w-screen-2xl p-6">
       <header className="mb-6">
         <Link
           href={`/clients/${client.id}`}
