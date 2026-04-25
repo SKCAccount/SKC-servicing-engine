@@ -1,0 +1,35 @@
+-- ============================================================================
+-- 0019_po_batch_reassigned_event_type.sql
+--
+-- Adds the `po_batch_reassigned` value to the `ledger_event_type` enum.
+--
+-- Why this migration is solo (no other statements):
+--
+--   Postgres won't let you reference a newly-added enum value within the same
+--   transaction that adds it. Supabase wraps each migration file in a single
+--   transaction. The companion migration (0020) needs to USE this enum value
+--   inside an updated CHECK constraint and inside the reassign_to_batch RPC,
+--   so the ADD VALUE has to commit first.
+--
+-- See CLAUDE.md "DB / SQL pitfalls" #1.
+--
+-- ----------------------------------------------------------------------------
+-- Why we add this event type at all:
+--
+-- Today, when commit_po_advance v2 reassigns a PO from one batch to another
+-- (e.g. the Manager committed a new advance against POs that were previously
+-- in a different batch), it updates `purchase_orders.batch_id` and
+-- `advances.batch_id` but does NOT emit a ledger_events row for the
+-- reassignment. The change shows up in `audit_log` (every reference-table
+-- UPDATE is auto-logged via trigger) but not in the financial ledger.
+--
+-- Per the project invariant that "every change made shows on the ledger,"
+-- batch reassignment is a first-class business event the Manager explicitly
+-- acknowledges via a UI checkbox — not something that should be buried in
+-- the generic before/after JSON of audit_log. Migration 0020 retrofits
+-- commit_po_advance to emit this event AND wires the new reassign_to_batch
+-- RPC (used by the standalone Assign-to-Batch screen) to emit it too, so
+-- both paths produce the same ledger trail.
+-- ============================================================================
+
+ALTER TYPE ledger_event_type ADD VALUE IF NOT EXISTS 'po_batch_reassigned';

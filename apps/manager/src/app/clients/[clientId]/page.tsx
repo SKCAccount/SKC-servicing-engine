@@ -130,6 +130,13 @@ export default async function ClientDashboardPage({ params }: PageProps) {
           phase="1D"
           live
         />
+        <ActionCard
+          title="Assign Items to a Batch"
+          description="Move outstanding POs (and later invoices + pre-advances) to an existing or new batch."
+          href={`/clients/${c.id}/batches/assign`}
+          phase="1D"
+          live
+        />
         <ActionCard title="Invoice Upload" phase="1E" />
         <ActionCard title="Advance on Accounts Receivable" phase="1E" />
         <ActionCard title="Pre-Advance on Accounts Receivable" phase="1E" />

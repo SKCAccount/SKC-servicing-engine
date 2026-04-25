@@ -1,5 +1,5 @@
 /**
- * Validators for the Advance workflow (Phase 1D onward).
+ * Validators for the Advance + Batch-management workflows (Phase 1D onward).
  */
 
 import { z } from 'zod';
@@ -46,3 +46,28 @@ export const commitPoAdvanceInputSchema = z
     },
   );
 export type CommitPoAdvanceInput = z.infer<typeof commitPoAdvanceInputSchema>;
+
+/**
+ * Input the standalone Assign-to-Batch screen submits.
+ *
+ * Same batch-destination convention as commitPoAdvanceInputSchema: pass
+ * either an existing_batch_id OR new_batch=true, never both. The
+ * acknowledged_batch_reassignment flag is required when any selected PO is
+ * currently in a different batch — the RPC re-validates server-side.
+ */
+export const reassignToBatchInputSchema = z
+  .object({
+    client_id: uuidSchema,
+    purchase_order_ids: z.array(uuidSchema).min(1),
+    existing_batch_id: uuidSchema.nullable(),
+    new_batch: z.boolean(),
+    acknowledged_batch_reassignment: z.boolean(),
+  })
+  .refine(
+    (v) => (v.existing_batch_id !== null) !== v.new_batch,
+    {
+      message: 'Pick exactly one of an existing batch OR new batch.',
+      path: ['existing_batch_id'],
+    },
+  );
+export type ReassignToBatchInput = z.infer<typeof reassignToBatchInputSchema>;

@@ -288,6 +288,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "advances_purchase_order_id_fkey"
+            columns: ["purchase_order_id"]
+            isOneToOne: false
+            referencedRelation: "v_purchase_orders_with_balance"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "advances_rule_set_id_fkey"
             columns: ["rule_set_id"]
             isOneToOne: false
@@ -1107,6 +1114,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "invoices_purchase_order_id_fkey"
+            columns: ["purchase_order_id"]
+            isOneToOne: false
+            referencedRelation: "v_purchase_orders_with_balance"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "invoices_upload_id_fkey"
             columns: ["upload_id"]
             isOneToOne: false
@@ -1278,6 +1292,13 @@ export type Database = {
             columns: ["purchase_order_id"]
             isOneToOne: false
             referencedRelation: "purchase_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "ledger_events_purchase_order_id_fkey"
+            columns: ["purchase_order_id"]
+            isOneToOne: false
+            referencedRelation: "v_purchase_orders_with_balance"
             referencedColumns: ["id"]
           },
           {
@@ -1525,6 +1546,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "purchase_order_lines_purchase_order_id_fkey"
+            columns: ["purchase_order_id"]
+            isOneToOne: false
+            referencedRelation: "v_purchase_orders_with_balance"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "purchase_order_lines_upload_id_fkey"
             columns: ["upload_id"]
             isOneToOne: false
@@ -1653,6 +1681,13 @@ export type Database = {
             columns: ["parent_po_id"]
             isOneToOne: false
             referencedRelation: "purchase_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_orders_parent_po_id_fkey"
+            columns: ["parent_po_id"]
+            isOneToOne: false
+            referencedRelation: "v_purchase_orders_with_balance"
             referencedColumns: ["id"]
           },
           {
@@ -2191,6 +2226,13 @@ export type Database = {
             referencedColumns: ["id"]
           },
           {
+            foreignKeyName: "advances_purchase_order_id_fkey"
+            columns: ["purchase_order_id"]
+            isOneToOne: false
+            referencedRelation: "v_purchase_orders_with_balance"
+            referencedColumns: ["id"]
+          },
+          {
             foreignKeyName: "advances_rule_set_id_fkey"
             columns: ["rule_set_id"]
             isOneToOne: false
@@ -2271,6 +2313,13 @@ export type Database = {
             columns: ["purchase_order_id"]
             isOneToOne: false
             referencedRelation: "purchase_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "invoices_purchase_order_id_fkey"
+            columns: ["purchase_order_id"]
+            isOneToOne: false
+            referencedRelation: "v_purchase_orders_with_balance"
             referencedColumns: ["id"]
           },
           {
@@ -2376,10 +2425,133 @@ export type Database = {
             referencedRelation: "purchase_orders"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "advances_purchase_order_id_fkey"
+            columns: ["purchase_order_id"]
+            isOneToOne: false
+            referencedRelation: "v_purchase_orders_with_balance"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      v_purchase_orders_with_balance: {
+        Row: {
+          batch_id: string | null
+          cancellation_memo: string | null
+          cancellation_reason_category:
+            | Database["public"]["Enums"]["cancellation_reason"]
+            | null
+          cancelled_at: string | null
+          cancelled_by: string | null
+          client_id: string | null
+          created_at: string | null
+          current_principal_cents: number | null
+          delivery_location: string | null
+          fees_outstanding_cents: number | null
+          id: string | null
+          issuance_date: string | null
+          item_description: string | null
+          parent_po_id: string | null
+          po_number: string | null
+          po_value_cents: number | null
+          quantity_ordered: number | null
+          requested_delivery_date: string | null
+          retailer_id: string | null
+          status: Database["public"]["Enums"]["po_status"] | null
+          unit_value_cents: number | null
+          updated_at: string | null
+          upload_id: string | null
+          version: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "purchase_orders_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_orders_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "mv_batch_position"
+            referencedColumns: ["batch_id"]
+          },
+          {
+            foreignKeyName: "purchase_orders_cancelled_by_fkey"
+            columns: ["cancelled_by"]
+            isOneToOne: false
+            referencedRelation: "users"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_orders_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "clients"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_orders_client_id_fkey"
+            columns: ["client_id"]
+            isOneToOne: false
+            referencedRelation: "mv_client_position"
+            referencedColumns: ["client_id"]
+          },
+          {
+            foreignKeyName: "purchase_orders_parent_po_id_fkey"
+            columns: ["parent_po_id"]
+            isOneToOne: false
+            referencedRelation: "purchase_orders"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_orders_parent_po_id_fkey"
+            columns: ["parent_po_id"]
+            isOneToOne: false
+            referencedRelation: "v_purchase_orders_with_balance"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_orders_retailer_id_fkey"
+            columns: ["retailer_id"]
+            isOneToOne: false
+            referencedRelation: "retailers"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "purchase_orders_upload_id_fkey"
+            columns: ["upload_id"]
+            isOneToOne: false
+            referencedRelation: "po_uploads"
+            referencedColumns: ["id"]
+          },
         ]
       }
     }
     Functions: {
+      bulk_upsert_purchase_orders: {
+        Args: {
+          p_client_id: string
+          p_lines: Json
+          p_po_rows: Json
+          p_retailer_id: string
+          p_skip_duplicates: boolean
+          p_upload_id: string
+        }
+        Returns: Json
+      }
+      commit_po_advance: {
+        Args: {
+          p_advance_date: string
+          p_allocations: Json
+          p_client_id: string
+          p_existing_batch_id: string
+          p_new_batch_name: string
+        }
+        Returns: Json
+      }
       current_rule_set: {
         Args: { p_client_id: string }
         Returns: {
@@ -2428,9 +2600,40 @@ export type Database = {
         Returns: string
       }
       po_line_value_variance: { Args: { p_po_id: string }; Returns: number }
+      reassign_to_batch: {
+        Args: {
+          p_acknowledged_batch_reassignment: boolean
+          p_client_id: string
+          p_existing_batch_id: string
+          p_new_batch_name: string
+          p_po_ids: string[]
+        }
+        Returns: Json
+      }
       recompute_client_over_advanced: {
         Args: { p_client_id: string }
         Returns: undefined
+      }
+      refresh_po_projections: { Args: never; Returns: undefined }
+      upsert_rule_set: {
+        Args: {
+          p_aged_out_warning_lead_days: number
+          p_aged_out_warnings_enabled: boolean
+          p_ar_advance_rate_bps: number
+          p_ar_aged_out_days: number
+          p_client_id: string
+          p_payment_allocation_fee_bps: number
+          p_payment_allocation_principal_bps: number
+          p_period_1_days: number
+          p_period_1_fee_rate_bps: number
+          p_period_2_days: number
+          p_period_2_fee_rate_bps: number
+          p_po_advance_rate_bps: number
+          p_pre_advance_rate_bps: number
+          p_subsequent_period_days: number
+          p_subsequent_period_fee_rate_bps: number
+        }
+        Returns: string
       }
     }
     Enums: {
@@ -2499,6 +2702,7 @@ export type Database = {
         | "advance_written_off"
         | "po_cancelled"
         | "po_cancellation_reversed"
+        | "po_batch_reassigned"
       match_type: "strict" | "fuzzy" | "manual"
       payment_link_target: "invoice" | "batch"
       po_line_status:
@@ -2719,6 +2923,7 @@ export const Constants = {
         "advance_written_off",
         "po_cancelled",
         "po_cancellation_reversed",
+        "po_batch_reassigned",
       ],
       match_type: ["strict", "fuzzy", "manual"],
       payment_link_target: ["invoice", "batch"],
