@@ -58,8 +58,17 @@ pnpm test              # unit tests in every package
 
 ## Build phases
 
-Currently in **Phase 1D (advances)**. Phase 1A-1C shipped: monorepo scaffold and core libraries (1A); auth completion, Client CRUD, rule-sets editor, user invitation (1B); Walmart + generic CSV PO parsers, PO upload UI, PO list view (1C); domain package, `commit_po_advance` RPC, Advance on POs UI (1D commits 1-3).
+**Phase 1D complete.** Shipped 1A-1D in order:
 
-Coming up: standalone Assign-to-Batch + unified outstanding-items table, dashboard aggregate metrics, then invoice ingestion (Phase 1E).
+- **1A** — monorepo scaffold + core libraries (money, dates, validators)
+- **1B** — auth (invite + password reset, PKCE + OTP), Client CRUD, rule-sets editor, user invitation
+- **1C** — Walmart PO parser (header + line + auto-detect) + generic CSV template, PO upload UI, PO list view
+- **1D commits 1-3** — `@seaking/domain` (borrowing-base + ratio leveling), `commit_po_advance` RPC, Advance on POs UI
+- **1D commit 4** — standalone Assign-to-Batch screen + `po_batch_reassigned` ledger event (both entry paths emit it)
+- **1D commit 5** — per-Client dashboard aggregate metrics + Batch filter
+- **CSV-of-PO-numbers secondary entry path** for advances (with downloadable template)
+- **Per-underlying floor borrowing base** correctness fix (migration 0021)
+
+Coming up: invoice ingestion (Phase 1E — Walmart + Kroger XLSX, three-way Kroger split, partial-invoicing splits, PO→AR conversion, pre-advance conversion).
 
 See `CLAUDE.md` for the canonical "what's shipped" list and `docs/BUILD_PROMPT.md` §5 for the full sequencing.

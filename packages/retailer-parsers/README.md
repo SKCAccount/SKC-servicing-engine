@@ -31,9 +31,11 @@ packages/retailer-parsers/src/
 │   ├── purchase-orders/         — Stub: throws with a clear message until a sample file arrives
 │   ├── invoices/                — Phase 1E
 │   └── payments/                — Phase 1F
-└── generic/
-    └── purchase-orders/         — Real parser (1C). One CSV may span multiple retailers (per-row Retailer column).
-        └── __fixtures__/
+├── generic/
+│   └── purchase-orders/         — Real parser (1C). One CSV may span multiple retailers (per-row Retailer column).
+│       └── __fixtures__/
+└── advance-csv/
+    └── po-numbers/              — Two-column CSV (Purchase Order Number, Retailer) for the Advance on POs secondary entry path. Pure parser; matching against existing POs happens server-side in apps/manager.
 ```
 
 ## Walmart PO auto-detection
@@ -60,6 +62,12 @@ Used by the upload UI's "Generic CSV template" option for retailers without a de
 **Retailer resolution** is the upload handler's job — it matches the parser's lowercased `retailer_slug` against `retailers.name` OR `display_name` (case-insensitive). Unresolved slugs surface as skipped rows in the upload review. Admin must pre-create new retailers in `retailers` (Studio only — no UI yet).
 
 The exported `GENERIC_PO_TEMPLATE_HEADER` constant is the canonical column list. The Manager app's `/api/po-template/generic` route serves it as a downloadable CSV so the template can never drift from what the parser accepts.
+
+## Advance CSV: PO numbers entry path
+
+`advance-csv/po-numbers/` parses the spec's two-column "list of POs to advance against" template (`Purchase Order Number`, `Retailer`). Same single-source-of-truth pattern as the generic PO template: `PO_NUMBERS_TEMPLATE_HEADER` constant + `parsePoNumbersCsv()` function, served from `/api/advance-template/po-numbers` in apps/manager.
+
+Validation rules: required headers (case-insensitive, whitespace-collapsed), rows missing PO# or Retailer skip with a reason, duplicate `(po_number, retailer_slug)` pairs dedupe silently, retailer slugs are lowercased and whitespace-collapsed for case-insensitive matching against `retailers.name` OR `retailers.display_name`. The matching step itself happens in `apps/manager .../advances/po/new/actions.ts → matchPosFromCsvAction` — this package only normalizes bytes to `PoNumbersRow` records.
 
 ## Full-replacement semantics (Walmart line-level)
 

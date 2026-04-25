@@ -138,7 +138,15 @@ export function planPoAdvance(
   // Δ × ΣV / 10000. Find the segment in which the cumulative cost crosses
   // `total` and solve for R within that segment.
   // ----------------------------------------------------------------------
-  const sorted = [...eligible].sort((a, b) => a.ratio - b.ratio);
+  // Sort by current ratio ascending; tie-break by id-asc so the order is
+  // fully deterministic across runs even if upstream insertion order shifts.
+  // (JS sort is stable per ES2019, but relying on insertion order from a
+  // Map populated across multiple paths — manual checks, select-all,
+  // CSV upload — is brittle.)
+  const sorted = [...eligible].sort((a, b) => {
+    if (a.ratio !== b.ratio) return a.ratio - b.ratio;
+    return a.p.id < b.p.id ? -1 : a.p.id > b.p.id ? 1 : 0;
+  });
 
   const tiers: Array<{ ratio: number; sumV: number }> = [];
   for (const e of sorted) {

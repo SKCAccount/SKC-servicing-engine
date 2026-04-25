@@ -267,9 +267,16 @@ Four materialized views (`mv_advance_balances`, `mv_client_position`, `mv_invoic
 
 | Writer | Event types emitted | Migration |
 |---|---|---|
-| `commit_po_advance(...)` RPC | `advance_committed` (one per inserted advance, paired 1:1 with the new `advances` row) | 0017 / 0018 |
+| `commit_po_advance(...)` RPC | `advance_committed` (1 per new advance), `po_batch_reassigned` (1 per PO whose batch changes) | 0017 / 0018 / 0020 |
+| `reassign_to_batch(...)` RPC | `po_batch_reassigned` (1 per PO whose batch changes) | 0020 |
 
-`commit_po_advance` is the canonical pattern for ledger-writing RPCs: validate inputs → resolve `rule_set_id` and `batch_id` → reassign POs (plus any existing committed/funded advances on those POs, per "advance batch follows PO") → INSERT advances and paired ledger_events in one transaction → call `refresh_po_projections()`. New writers (advance funding, invoice ingestion, payments) should follow this shape. See migrations 0017/0018 for the worked example, including the v2 fix that moves stranded advances when a PO is reassigned mid-flow.
+`commit_po_advance` is the canonical pattern for ledger-writing RPCs: validate inputs → resolve `rule_set_id` and `batch_id` → reassign POs (emitting one `po_batch_reassigned` event per PO that moved, plus carrying any existing committed/funded advances on those POs to the new batch per "advance batch follows PO") → INSERT advances and paired `advance_committed` events in one transaction → call `refresh_po_projections()`. New writers (advance funding, invoice ingestion, payments) should follow this shape. See migrations 0017/0018/0020 for the worked example.
+
+Both batch-changing entry paths emit `po_batch_reassigned` with `metadata.source` set so audit queries can distinguish "reassigned as part of a new advance commit" from "reassigned via the standalone screen."
+
+### Derived read view
+
+`v_purchase_orders_with_balance` (migration 0020) is a thin SQL view that pre-joins `purchase_orders` to a per-PO aggregate of `mv_advance_balances` (`current_principal_cents`, `fees_outstanding_cents`). Use this view for any list page that needs per-PO outstanding principal — it eliminates the separate balance-fetch step and avoids the `.in()` fan-out trap documented in CLAUDE.md DB pitfall #7. Currently used by `/clients/[id]/batches/assign` and `/clients/[id]/advances/po/new`.
 
 ---
 
@@ -326,20 +333,22 @@ Primary Manager UI. Routes built so far:
 - `/auth/reset-password` — post-recovery password change
 - `/clients` — list (RLS-scoped)
 - `/clients/new` — Admin-only creation
-- `/clients/[clientId]` — per-Client dashboard with action cards (the spec's full "Main Interface" metrics block lands in Phase 1D commit 5)
+- `/clients/[clientId]` — per-Client dashboard. 13-metric "Main Interface" block (PO/AR/Pre-Advance principal + value + ratio + BB available, fees, remittance, over-advanced flag) at top, URL-driven Batch filter, action cards for every shipped + planned screen.
 - `/clients/[clientId]/edit` — Admin-only, optimistic locked
 - `/clients/[clientId]/rules` — Admin-only Borrowing Base + Fee Rules editor
 - `/clients/[clientId]/po-uploads/new` — PO Upload (Walmart auto-detect + generic CSV), two-phase preview → commit
 - `/clients/[clientId]/purchase-orders` — PO list with URL-driven filter/sort/pagination
-- `/clients/[clientId]/advances/po/new` — Advance on POs: multi-page selection, ratio-leveling preview, batch-reassignment ack
+- `/clients/[clientId]/advances/po/new` — Advance on POs: multi-page selection, ratio-leveling preview, batch-reassignment ack, multi-select Batch + Status filters, sortable Current Principal, CSV-of-PO-numbers secondary entry path with downloadable template
+- `/clients/[clientId]/batches/assign` — Standalone Assign-to-Batch screen with the spec's unified outstanding-items table (POs only today; pre-advances + invoices fold in when those creation paths exist)
 - `/users` — roster + grants table
 - `/users/new` — Admin-only invite
 - `/users/[userId]` — Admin-only edit (self-edit blocked)
-- `/api/po-template/generic` — serves `GENERIC_PO_TEMPLATE_HEADER` from `@seaking/retailer-parsers` as a downloadable CSV. Single source of truth for the template — guaranteed to match what the parser accepts.
+- `/api/po-template/generic` — serves `GENERIC_PO_TEMPLATE_HEADER` from `@seaking/retailer-parsers` as a downloadable CSV. Single source of truth for the PO upload template — guaranteed to match what the parser accepts.
+- `/api/advance-template/po-numbers` — serves `PO_NUMBERS_TEMPLATE_HEADER` from `@seaking/retailer-parsers/advance-csv/po-numbers`. Same single-source-of-truth pattern for the CSV-of-PO-numbers advance entry path.
 
 Middleware (`apps/manager/middleware.ts`) runs `updateSession` on every non-static request to refresh auth cookies. `next.config.ts` raises `bodySizeLimit` to 50 MB for the upload routes and lists every workspace package in `transpilePackages`.
 
-**List-page UX conventions** (URL-driven state, server-side sort whitelist, client-side `Map<id, fullData>` selection that survives URL navigations) are documented in CLAUDE.md and applied on the `/purchase-orders` and `/advances/po/new` pages. New list pages should follow the same shape.
+**List-page UX conventions** (URL-driven state, server-side sort whitelist, client-side `Map<id, fullData>` selection that survives URL navigations, comma-separated multi-value filters, `v_purchase_orders_with_balance` for principal-aware sorts) are documented in CLAUDE.md and applied on the `/purchase-orders`, `/advances/po/new`, and `/batches/assign` pages. New list pages should follow the same shape.
 
 ### apps/client-portal
 
@@ -347,7 +356,7 @@ Read-only portal + future advance-request submission. Mirrors the auth routes ab
 
 ### apps/jobs
 
-Still empty as of Phase 1D commit 3. Edge functions arrive later in 1D-1H: `daily-fee-accrual`, `aged-out-warning`, `weekly-digest`, `refresh-projections`, `projection-drift-check`. Today, `commit_po_advance` calls `refresh_po_projections()` synchronously inline — fine while the only mv writer is the advance-commit path; will need to move to a debounced worker once invoice/payment writers come online.
+Still empty as of Phase 1D. Edge functions arrive later in 1D-1H: `daily-fee-accrual`, `aged-out-warning`, `weekly-digest`, `refresh-projections`, `projection-drift-check`. Today, `commit_po_advance` and `reassign_to_batch` call `refresh_po_projections()` synchronously inline (or the server action calls it after the RPC returns) — fine while the only mv writers are the advance-commit and batch-reassignment paths; will need to move to a debounced worker once invoice/payment writers come online.
 
 ---
 
@@ -386,6 +395,8 @@ git commit -m "chore(db): regenerate types after <migration>"
 - Function "relation does not exist" from a view → add `SET search_path = public` to the function definition.
 - INSERT into RLS-protected table fails from a trigger → mark trigger function `SECURITY DEFINER` + `SET search_path = public` (see migration 0014 pattern).
 - `.limit(N)` for N > 1000 returning only 1000 rows → PostgREST max-rows clamp; parallel-paginate via `.range(start, end)` (see `fetchAllMatchingPoIdsAction`).
+- Per-PO sums against `mv_advance_balances` undercount → MV has 1+ rows per advance, so `.in('purchase_order_id', big_array)` can fan out past the 1000-row clamp. Use `v_purchase_orders_with_balance` instead — it pre-aggregates principal per PO server-side.
+- Borrowing-base UI shows fractional cents like `$X.YY.999...` → `SUM(bigint) → numeric` in Postgres carries decimals through. Cast aggregations to bigint at the projection layer; `formatDollars` floors defensively as a guard.
 - Bulk DML in PL/pgSQL hitting 60s statement timeout → replace per-row FOR loop with single-statement `INSERT … ON CONFLICT` over `jsonb_array_elements` (see `bulk_upsert_purchase_orders` v2, migration 0016).
 - papaparse silently merging rows → pre-normalize CRLF/CR to LF in `csv.ts` before parsing.
 - Email link bounces to `/login` with no error → check Supabase dashboard redirect allowlist.

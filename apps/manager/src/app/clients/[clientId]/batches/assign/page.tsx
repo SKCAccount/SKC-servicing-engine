@@ -237,9 +237,9 @@ export default async function AssignToBatchPage({ params, searchParams }: PagePr
       </header>
 
       <div className="mb-4 rounded border border-blue-200 bg-blue-50 p-3 text-xs text-seaking-muted">
-        <strong className="text-seaking-ink">Phase 1D commit 4:</strong> only Purchase Order rows
-        are listed today. Pre-Advance and Accounts-Receivable rows arrive once their creation
-        paths ship.
+        <strong className="text-seaking-ink">Note:</strong> only Purchase Order rows are listed
+        today. Pre-Advance and Accounts-Receivable rows arrive once their creation paths ship
+        (Phase 1E).
       </div>
 
       {error && (

@@ -23,6 +23,20 @@ import {
 } from '@seaking/domain';
 ```
 
+## Per-underlying floor borrowing base
+
+Every borrowing-base helper (`poBorrowingBase`, `arBorrowingBase`, `preAdvanceBorrowingBase`, `singlePoRoomCents`, `singleArRoomCents`) returns `floor(value × rate / 10000)` for a SINGLE underlying via `applyBpsFloor` from `@seaking/money`. For Client-level totals, call the per-underlying helper inside a loop and sum the results — `summarizeSelectedPos` is the canonical example.
+
+Why per-underlying floor instead of aggregate × rate:
+
+- The spec says each PO's contribution is rounded down to the nearest cent.
+- Aggregate-then-multiply produces fractional cents that lets the effective per-PO advance rate creep over the cap by fractional pennies × N POs.
+- After leveling and integer rounding, individual POs could land at pro-forma ratio `> rate_cap` (e.g. 70.005% on a 70% cap).
+
+Floor per underlying is the conservative answer; the per-row totals never exceed the spec's percentage. Same convention applied at the SQL projection layer in `mv_client_position` (migration 0021).
+
+`planPoAdvance` adds a final post-clamp pass after the deterministic allocator returns its shares — any PO landed 1 cent above its floored room (rare but possible when ideal sits exactly at room boundary) gets clamped, with the excess greedily redistributed to POs with remaining capacity. Test coverage in `po-advance.test.ts` "Derek 2026-04-25 regression."
+
 ## The PO advance allocation rule — ratio leveling
 
 Per `01_FUNCTIONAL_SPEC.md §Advancing Purchase Orders`, after committing the advance the per-PO Borrowing Ratios should remain as low and as **equal** as possible, without reassigning principal between POs. That intent is implemented as ratio leveling:

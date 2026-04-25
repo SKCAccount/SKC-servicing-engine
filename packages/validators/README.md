@@ -30,7 +30,7 @@ import { z, isoDateSchema, centsSchema, uuidSchema, ... } from '@seaking/validat
 | `src/rule-sets.ts` | `ruleSetInputSchema` plus `pctToBps` / `bpsToPct` helpers | Borrowing-base + Fee Rules editor |
 | `src/users.ts` | `userRoleSchema`, `inviteUserInputSchema`, `updateUserInputSchema` | User invitation + edit flows |
 | `src/po-uploads.ts` | `retailerSlugSchema`, `poUploadContextSchema`, plus `PoUploadPreview` / `PoUploadCommitResult` types | PO upload preview + commit actions |
-| `src/advances.ts` | `advanceAllocationSchema`, `commitPoAdvanceInputSchema` | Advance on POs commit action |
+| `src/advances.ts` | `advanceAllocationSchema`, `commitPoAdvanceInputSchema`, `reassignToBatchInputSchema` | Advance on POs commit action + standalone Assign-to-Batch screen |
 
 **Convention**: one file per workflow. `src/index.ts` re-exports everything. New workflow → new file → add to index. Avoids a single bloated module as the schema set grows.
 

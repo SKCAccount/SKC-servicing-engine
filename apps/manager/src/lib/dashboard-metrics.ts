@@ -242,22 +242,31 @@ export async function loadClientPosition(
   const arRateBps = ruleSet?.ar_advance_rate_bps ?? 0;
   const preAdvanceRateBps = ruleSet?.pre_advance_rate_bps ?? 0;
 
-  // Eligible AR value per batch: 0 until invoices ship in 1E. The query that
-  // would compute it requires invoices.po_id → po.batch_id joined to
-  // mv_invoice_aging. Once invoices ingest, swap this for per-invoice floor
-  // sum. The return shape doesn't change.
+  // Phase 1E TBD: AR-side and pre-advance-base computations are stubs
+  // until invoice ingestion ships.
+  //
+  //   * eligibleArValueCents requires SUM over mv_invoice_aging rows
+  //     attached to POs in this batch (via invoice.purchase_order_id →
+  //     purchase_orders.batch_id), filtered by is_aged_out = false.
+  //   * eligibleArPrincipalCents (the pre-advance pool) requires advance.
+  //     invoice_id joined to mv_invoice_aging.is_aged_out = false. We
+  //     CANNOT use arPrincipalCents (total AR principal in this batch) as
+  //     a proxy because that includes aged-out AR, which per spec
+  //     resolution 4 is excluded from the pre-advance pool.
+  //
+  // Both are 0 today (no invoices in DB yet) so we're hardcoding 0 rather
+  // than computing from the wrong source. When 1E lands, replace these
+  // with the proper per-invoice floor sums. mv_client_position (the
+  // unfiltered path) already does the right thing because its eligible_
+  // ar_principal_cents column comes from the po_outstanding CTE which
+  // already filters by mv_invoice_aging.is_aged_out.
   const eligibleArValueCents = 0;
+  const eligibleArPrincipalCents = 0;
 
-  // poBbCents already computed above as per-PO floored sum.
-  // For AR, since eligibleArValueCents is currently 0 (no invoices yet),
-  // the per-invoice floor sum equals 0; once 1E ships, change to walk
-  // mv_invoice_aging rows and floor each.
   const arBbCents = Math.floor((eligibleArValueCents * arRateBps) / 10_000);
-  // Pre-advance BB per batch uses eligible AR principal in this batch. Until
-  // 1E ships, eligible AR principal is 0 in any batch. Floor over the
-  // aggregate is fine because eligible_ar_principal is per-Client/batch
-  // already (one number, not per-row).
-  const preAdvanceBbCents = Math.floor((arPrincipalCents * preAdvanceRateBps) / 10_000);
+  const preAdvanceBbCents = Math.floor(
+    (eligibleArPrincipalCents * preAdvanceRateBps) / 10_000,
+  );
 
   const isOverAdvanced = clientPositionResult.data?.is_over_advanced ?? false;
   const cp = clientPositionResult.data;

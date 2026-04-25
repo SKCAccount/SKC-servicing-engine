@@ -3,24 +3,19 @@
 /**
  * Server actions for the 'Advance on Purchase Orders' workflow.
  *
- * Four actions:
- *   1. fetchPoAdvanceContextAction — pull the full per-PO context (value,
- *      principal, batch, retailer label) for an arbitrary id list. Used by
- *      the CSV-of-PO-numbers secondary entry path after matchPosFromCsv
- *      resolves the (po_number, retailer) tuples to ids.
- *
- *   2. fetchAllMatchingPoIdsAction — runs the same filter query the page
+ * Three actions:
+ *   1. fetchAllMatchingPoIdsAction — runs the same filter query the page
  *      runs (without pagination) and returns up to `hardLimit` PO summary
  *      rows so the UI can let the Manager 'Select all matches' even when
  *      they span multiple pages.
  *
- *   3. matchPosFromCsvAction — parses an uploaded two-column CSV
+ *   2. matchPosFromCsvAction — parses an uploaded two-column CSV
  *      (Purchase Order Number, Retailer) and returns matched rows
  *      (resolved against existing eligible POs) plus unmatched rows the
  *      UI can offer to re-export. Spec §"Advancing Purchase Orders"
  *      → Secondary Option.
  *
- *   4. commitPoAdvanceAction — given the planned allocation + advance date +
+ *   3. commitPoAdvanceAction — given the planned allocation + advance date +
  *      batch choice, call the commit_po_advance RPC, then refresh
  *      projections so the dashboards see the new advance immediately.
  *
@@ -39,40 +34,12 @@ import {
   commitPoAdvanceInputSchema,
   type CommitPoAdvanceInput,
 } from '@seaking/validators';
-import type { Cents } from '@seaking/money';
-import { cents } from '@seaking/money';
 import { supabaseError, zodError } from '@/lib/action-helpers';
 import { revalidatePath } from 'next/cache';
 
-interface PoSummary {
-  id: string;
-  po_number: string;
-  retailer_id: string;
-  retailer_display: string;
-  status: string;
-  po_value_cents: Cents;
-  current_principal_cents: Cents;
-  current_batch_id: string | null;
-  current_batch_label: string | null;
-}
-
-interface BatchOption {
-  id: string;
-  label: string;
-}
-
-export interface PoAdvanceContext {
-  pos: PoSummary[];
-  batches: BatchOption[];
-  /** Active rule_set's PO advance rate (bps). null if no active rule set. */
-  po_advance_rate_bps: number | null;
-  /** True only when no rule_set exists for the Client — UI must block commit. */
-  rule_set_missing: boolean;
-}
-
 /**
  * Authorize: caller is a Manager AND has access to this Client.
- * Centralized so the two actions share the check.
+ * Centralized so every action shares the check.
  */
 async function authorize(clientId: string): Promise<
   | { ok: true; user: { id: string; email: string; role: string } }
@@ -98,117 +65,6 @@ async function authorize(clientId: string): Promise<
     return { ok: false, err: err('FORBIDDEN', 'You do not have access to this Client.') };
   }
   return { ok: true, user };
-}
-
-// ============================================================================
-// fetchPoAdvanceContextAction
-// ============================================================================
-
-export async function fetchPoAdvanceContextAction(
-  clientId: string,
-  poIds: string[],
-): Promise<ActionResult<PoAdvanceContext>> {
-  if (poIds.length === 0) {
-    return err('BAD_REQUEST', 'No POs selected.');
-  }
-
-  const authz = await authorize(clientId);
-  if (!authz.ok) return authz.err;
-
-  const supabase = await createSupabaseServerClient();
-
-  // Pull POs (RLS scopes by client_id), batches, retailers, current rule_set,
-  // and per-PO outstanding principal from the projection in parallel.
-  const [
-    { data: poRows, error: poError },
-    { data: batchRows },
-    { data: retailerRows },
-    { data: ruleSet },
-    { data: balanceRows },
-  ] = await Promise.all([
-    supabase
-      .from('purchase_orders')
-      .select('id, po_number, status, po_value_cents, retailer_id, batch_id')
-      .eq('client_id', clientId)
-      .in('id', poIds),
-    supabase
-      .from('batches')
-      .select('id, name, batch_number')
-      .eq('client_id', clientId)
-      .order('batch_number', { ascending: true }),
-    supabase.from('retailers').select('id, display_name'),
-    supabase
-      .from('rule_sets')
-      .select('po_advance_rate_bps')
-      .eq('client_id', clientId)
-      .is('effective_to', null)
-      .maybeSingle(),
-    // Sum of currently-outstanding principal per PO. mv_advance_balances
-    // groups by advance_id; we re-aggregate by purchase_order_id here.
-    supabase
-      .from('mv_advance_balances')
-      .select('purchase_order_id, principal_outstanding_cents')
-      .eq('client_id', clientId)
-      .in('purchase_order_id', poIds),
-  ]);
-
-  if (poError) return supabaseError(poError);
-
-  const retailers = (retailerRows ?? []) as Array<{ id: string; display_name: string }>;
-  const retailerById = new Map(retailers.map((r) => [r.id, r.display_name]));
-  const batches = (batchRows ?? []) as Array<{ id: string; name: string; batch_number: number }>;
-  const batchById = new Map(batches.map((b) => [b.id, b.name]));
-
-  // Aggregate principal per PO from the materialized view.
-  const principalByPo = new Map<string, number>();
-  for (const row of (balanceRows ?? []) as Array<{
-    purchase_order_id: string;
-    principal_outstanding_cents: number;
-  }>) {
-    principalByPo.set(
-      row.purchase_order_id,
-      (principalByPo.get(row.purchase_order_id) ?? 0) + (row.principal_outstanding_cents ?? 0),
-    );
-  }
-
-  type PoRowQuery = {
-    id: string;
-    po_number: string;
-    status: string;
-    po_value_cents: number;
-    retailer_id: string;
-    batch_id: string | null;
-  };
-  const pos: PoSummary[] = ((poRows ?? []) as PoRowQuery[]).map((p) => ({
-    id: p.id,
-    po_number: p.po_number,
-    retailer_id: p.retailer_id,
-    retailer_display: retailerById.get(p.retailer_id) ?? '?',
-    status: p.status,
-    po_value_cents: cents(p.po_value_cents),
-    current_principal_cents: cents(principalByPo.get(p.id) ?? 0),
-    current_batch_id: p.batch_id,
-    current_batch_label: p.batch_id ? (batchById.get(p.batch_id) ?? null) : null,
-  }));
-
-  // Surface POs that were requested but didn't come back (e.g. wrong client,
-  // since-deleted, etc.) as an error rather than a silent partial result.
-  if (pos.length !== poIds.length) {
-    const found = new Set(pos.map((p) => p.id));
-    const missing = poIds.filter((id) => !found.has(id));
-    return err(
-      'PO_NOT_FOUND',
-      `Could not find ${missing.length} of the selected POs (probably out of your access scope).`,
-    );
-  }
-
-  const ruleSetRow = ruleSet as { po_advance_rate_bps: number } | null;
-  return ok({
-    pos,
-    batches: batches.map((b) => ({ id: b.id, label: b.name })),
-    po_advance_rate_bps: ruleSetRow?.po_advance_rate_bps ?? null,
-    rule_set_missing: !ruleSetRow,
-  });
 }
 
 // ============================================================================
