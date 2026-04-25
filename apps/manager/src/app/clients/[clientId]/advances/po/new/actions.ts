@@ -410,25 +410,59 @@ export async function fetchAllMatchingPoIdsAction(
     }
   }
 
-  // Step 3: aggregate principal per PO from mv_advance_balances. Chunk
-  // the IN clause to avoid URL length limits.
+  // Step 3: aggregate principal per PO from mv_advance_balances.
+  //
+  // BUG FIX (Derek 2026-04-25): the previous implementation chunked by 500
+  // PO ids and ran `.in('purchase_order_id', chunk)`. mv_advance_balances
+  // has one row per ADVANCE (not per PO), and PostgREST silently clamps
+  // any single response at max-rows = 1000 (CLAUDE.md DB pitfall #5). With
+  // 500 POs averaging 2+ advances each, each chunk's response could hit
+  // the cap, dropping advance rows on the floor and undercounting current
+  // principal. Symptom: "Select all matches" totaled $8,385.56 of current
+  // principal while batch-by-batch sum showed $13,145.65.
+  //
+  // Fix: count first, then parallel-paginate the mv_advance_balances query
+  // for this client by 1000-row pages with .range(start, end). All advances
+  // for the client come back; we filter in memory to the matched PO IDs.
+  // Same pattern as the PO-paging at the top of this action.
   const principalByPo = new Map<string, number>();
-  for (let i = 0; i < rows.length; i += 500) {
-    const chunk = rows.slice(i, i + 500).map((r) => r.id);
-    const { data: balanceRows } = await supabase
+  if (rows.length > 0) {
+    const matchedPoIdSet = new Set(rows.map((r) => r.id));
+
+    const { count: balanceCount, error: balanceCountError } = await supabase
       .from('mv_advance_balances')
-      .select('purchase_order_id, principal_outstanding_cents')
-      .eq('client_id', clientId)
-      .in('purchase_order_id', chunk);
-    for (const row of (balanceRows ?? []) as Array<{
-      purchase_order_id: string;
-      principal_outstanding_cents: number;
-    }>) {
-      principalByPo.set(
-        row.purchase_order_id,
-        (principalByPo.get(row.purchase_order_id) ?? 0) +
-          (row.principal_outstanding_cents ?? 0),
-      );
+      .select('advance_id', { count: 'exact', head: true })
+      .eq('client_id', clientId);
+    if (balanceCountError) return supabaseError(balanceCountError);
+
+    const balanceTotal = balanceCount ?? 0;
+    const BALANCE_PAGE = 1000;
+    const balancePageCount = balanceTotal > 0 ? Math.ceil(balanceTotal / BALANCE_PAGE) : 0;
+    const balanceRequests = Array.from({ length: balancePageCount }, (_, i) => {
+      const start = i * BALANCE_PAGE;
+      const end = start + BALANCE_PAGE - 1;
+      return supabase
+        .from('mv_advance_balances')
+        .select('purchase_order_id, principal_outstanding_cents')
+        .eq('client_id', clientId)
+        .order('advance_id', { ascending: true })
+        .range(start, end);
+    });
+    const balanceResponses = await Promise.all(balanceRequests);
+    for (const res of balanceResponses) {
+      if (res.error) return supabaseError(res.error);
+      for (const row of (res.data ?? []) as Array<{
+        purchase_order_id: string | null;
+        principal_outstanding_cents: number;
+      }>) {
+        if (!row.purchase_order_id) continue; // pre-advances have no PO
+        if (!matchedPoIdSet.has(row.purchase_order_id)) continue;
+        principalByPo.set(
+          row.purchase_order_id,
+          (principalByPo.get(row.purchase_order_id) ?? 0) +
+            (row.principal_outstanding_cents ?? 0),
+        );
+      }
     }
   }
 
@@ -654,22 +688,49 @@ export async function matchPosFromCsvAction(
   }
 
   // ---------- Fetch outstanding-principal + display labels ----------
+  // Same parallel-pagination strategy as fetchAllMatchingPoIdsAction —
+  // .in('purchase_order_id', large_array) on mv_advance_balances can hit
+  // PostgREST's max-rows=1000 clamp when matched POs collectively have
+  // many advances. Pull all advances for the client paginated, filter to
+  // matched in memory.
   const principalByPo = new Map<string, number>();
   if (matchedIds.length > 0) {
-    const { data: balanceRows } = await supabase
+    const matchedSet = new Set(matchedIds);
+
+    const { count: balanceCount, error: balanceCountError } = await supabase
       .from('mv_advance_balances')
-      .select('purchase_order_id, principal_outstanding_cents')
-      .eq('client_id', clientId)
-      .in('purchase_order_id', matchedIds);
-    for (const row of (balanceRows ?? []) as Array<{
-      purchase_order_id: string;
-      principal_outstanding_cents: number;
-    }>) {
-      principalByPo.set(
-        row.purchase_order_id,
-        (principalByPo.get(row.purchase_order_id) ?? 0) +
-          (row.principal_outstanding_cents ?? 0),
-      );
+      .select('advance_id', { count: 'exact', head: true })
+      .eq('client_id', clientId);
+    if (balanceCountError) return supabaseError(balanceCountError);
+
+    const balanceTotal = balanceCount ?? 0;
+    const BALANCE_PAGE = 1000;
+    const balancePageCount = balanceTotal > 0 ? Math.ceil(balanceTotal / BALANCE_PAGE) : 0;
+    const balanceRequests = Array.from({ length: balancePageCount }, (_, i) => {
+      const start = i * BALANCE_PAGE;
+      const end = start + BALANCE_PAGE - 1;
+      return supabase
+        .from('mv_advance_balances')
+        .select('purchase_order_id, principal_outstanding_cents')
+        .eq('client_id', clientId)
+        .order('advance_id', { ascending: true })
+        .range(start, end);
+    });
+    const balanceResponses = await Promise.all(balanceRequests);
+    for (const res of balanceResponses) {
+      if (res.error) return supabaseError(res.error);
+      for (const row of (res.data ?? []) as Array<{
+        purchase_order_id: string | null;
+        principal_outstanding_cents: number;
+      }>) {
+        if (!row.purchase_order_id) continue;
+        if (!matchedSet.has(row.purchase_order_id)) continue;
+        principalByPo.set(
+          row.purchase_order_id,
+          (principalByPo.get(row.purchase_order_id) ?? 0) +
+            (row.principal_outstanding_cents ?? 0),
+        );
+      }
     }
   }
 
