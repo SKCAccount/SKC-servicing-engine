@@ -347,25 +347,17 @@ export async function fetchAllMatchingPoIdsAction(
   if (countError) return supabaseError(countError);
   const total = totalCount ?? 0;
 
-  // Step 2: fetch up to hardLimit ids/data.
-  let dataQ = supabase
-    .from('purchase_orders')
-    .select(
-      'id, po_number, status, po_value_cents, retailer_id, batch_id, issuance_date, requested_delivery_date, created_at',
-    )
-    .eq('client_id', clientId)
-    .in('status', statusList)
-    .order('id', { ascending: true })
-    .limit(hardLimit);
-  if (filter.q) dataQ = dataQ.ilike('po_number', `%${filter.q}%`);
-  if (retailerId) dataQ = dataQ.eq('retailer_id', retailerId);
-  if (filter.batch_id === 'unassigned') dataQ = dataQ.is('batch_id', null);
-  else if (filter.batch_id) dataQ = dataQ.eq('batch_id', filter.batch_id);
-  if (filter.value_min_cents != null) dataQ = dataQ.gte('po_value_cents', filter.value_min_cents);
-  if (filter.value_max_cents != null) dataQ = dataQ.lte('po_value_cents', filter.value_max_cents);
-
-  const { data: poRows, error: poError } = await dataQ;
-  if (poError) return supabaseError(poError);
+  // Step 2: fetch up to hardLimit rows. Supabase/PostgREST defaults to a
+  // max of 1000 rows per response, so a single .limit(5000) gets clamped.
+  // Workaround: split into parallel page-sized requests and merge. Each
+  // page uses .range(start, end) for stable, deterministic slicing because
+  // we ORDER BY id ascending.
+  //
+  // Five concurrent 1k-row requests run roughly as fast as one — the
+  // dominant cost is round-trip latency, not data transfer.
+  const PAGE_SIZE = 1000;
+  const targetCount = Math.min(total, hardLimit);
+  const pageCount = targetCount > 0 ? Math.ceil(targetCount / PAGE_SIZE) : 0;
 
   type RawPo = {
     id: string;
@@ -378,7 +370,37 @@ export async function fetchAllMatchingPoIdsAction(
     requested_delivery_date: string | null;
     created_at: string;
   };
-  const rows = (poRows ?? []) as RawPo[];
+
+  const rows: RawPo[] = [];
+  if (pageCount > 0) {
+    const pageRequests = Array.from({ length: pageCount }, (_, i) => {
+      const start = i * PAGE_SIZE;
+      const end = Math.min(start + PAGE_SIZE - 1, targetCount - 1);
+      let pageQ = supabase
+        .from('purchase_orders')
+        .select(
+          'id, po_number, status, po_value_cents, retailer_id, batch_id, issuance_date, requested_delivery_date, created_at',
+        )
+        .eq('client_id', clientId)
+        .in('status', statusList)
+        .order('id', { ascending: true })
+        .range(start, end);
+      if (filter.q) pageQ = pageQ.ilike('po_number', `%${filter.q}%`);
+      if (retailerId) pageQ = pageQ.eq('retailer_id', retailerId);
+      if (filter.batch_id === 'unassigned') pageQ = pageQ.is('batch_id', null);
+      else if (filter.batch_id) pageQ = pageQ.eq('batch_id', filter.batch_id);
+      if (filter.value_min_cents != null)
+        pageQ = pageQ.gte('po_value_cents', filter.value_min_cents);
+      if (filter.value_max_cents != null)
+        pageQ = pageQ.lte('po_value_cents', filter.value_max_cents);
+      return pageQ;
+    });
+    const responses = await Promise.all(pageRequests);
+    for (const res of responses) {
+      if (res.error) return supabaseError(res.error);
+      for (const row of (res.data ?? []) as RawPo[]) rows.push(row);
+    }
+  }
 
   // Step 3: aggregate principal per PO from mv_advance_balances. Chunk
   // the IN clause to avoid URL length limits.
