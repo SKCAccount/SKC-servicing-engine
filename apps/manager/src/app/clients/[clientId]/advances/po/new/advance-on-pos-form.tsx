@@ -3,20 +3,24 @@
 /**
  * Advance-on-POs multi-step form.
  *
- * Three sections rendered top-to-bottom on a single page (no route hops):
+ * Three sections rendered top-to-bottom:
  *
- *   1. Select POs (checkbox table with simple search)
- *   2. Configure (advance amount as % of available OR fixed $; advance date;
- *      batch — existing or new)
- *   3. Review (per-PO allocation from planPoAdvance, totals, Commit/Cancel)
+ *   1. Select POs — server-paginated table with filter form, sortable
+ *      columns, and a 'rows per page' selector. Selection persists across
+ *      filter/sort/page changes via a Map<id, full-data> in client state:
+ *      when you check a row, we copy its data into the Map so we can still
+ *      render aggregate metrics and run allocation later even after the row
+ *      has scrolled out of view.
  *
- * Allocation runs entirely client-side using @seaking/domain.planPoAdvance.
- * Server validates each line via the commit_po_advance RPC.
+ *   2. Configure — advance amount (% of available OR fixed $), advance
+ *      date, batch (new or existing).
  *
- * State approach: plain useState. Selection lives in a Set<id>. Allocation
- * is recomputed via useMemo whenever the inputs change. No React Query / no
- * URL state — this is a single-session workflow that doesn't benefit from
- * deep-linking.
+ *   3. Review — per-PO allocation from planPoAdvance with totals, over-
+ *      advanced acknowledgement, Commit / Cancel.
+ *
+ * Why selection lives in client state and not URL: selection is the user's
+ * shopping cart, and bookmarking a half-built advance is rarely useful.
+ * Filters/sort/page DO go in the URL so the table state itself is shareable.
  */
 
 import { displayCents } from '@seaking/ui';
@@ -29,11 +33,12 @@ import {
   type PoAdvancePlan,
   type SelectedPoForAdvance,
 } from '@seaking/domain';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { commitPoAdvanceAction } from './actions';
 
-interface CandidatePo {
+export interface CandidatePo {
   id: string;
   po_number: string;
   retailer_id: string;
@@ -45,34 +50,71 @@ interface CandidatePo {
   current_batch_label: string | null;
   issuance_date: string | null;
   requested_delivery_date: string | null;
+  created_at: string;
 }
 
 interface BatchOption {
   id: string;
   label: string;
 }
+interface RetailerOption {
+  slug: string;
+  label: string;
+}
+interface StatusOption {
+  value: string;
+  label: string;
+}
+
+interface CurrentFilters {
+  q: string | null;
+  retailer: string | null;
+  batch: string | null;
+  status: string | null;
+  value_min_cents: number | null;
+  value_max_cents: number | null;
+  sort: string;
+  dir: 'asc' | 'desc';
+  page: number;
+  page_size: number;
+}
 
 interface Props {
   clientId: string;
   poAdvanceRateBps: number | null;
+  retailers: RetailerOption[];
   batches: BatchOption[];
+  statuses: StatusOption[];
+  pageSizeOptions: number[];
   candidates: CandidatePo[];
+  totalCount: number;
+  rawSearchParams: Record<string, string>;
+  currentFilters: CurrentFilters;
 }
 
 type AmountMode = 'percent' | 'fixed';
 type BatchMode = 'new' | 'existing';
 
-export function AdvanceOnPosForm({
-  clientId,
-  poAdvanceRateBps,
-  batches,
-  candidates,
-}: Props) {
+export function AdvanceOnPosForm(props: Props) {
+  const {
+    clientId,
+    poAdvanceRateBps,
+    retailers,
+    batches,
+    statuses,
+    pageSizeOptions,
+    candidates,
+    totalCount,
+    rawSearchParams,
+    currentFilters,
+  } = props;
+
   const router = useRouter();
 
-  // ---------- Selection state ----------
-  const [search, setSearch] = useState('');
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // ---------- Selection state (Map keyed by PO id) ----------
+  // We store the FULL CandidatePo so we can compute aggregates and run
+  // allocation even when the row isn't visible in the current page slice.
+  const [selected, setSelected] = useState<Map<string, CandidatePo>>(new Map());
 
   // ---------- Configure state ----------
   const [amountMode, setAmountMode] = useState<AmountMode>('percent');
@@ -86,38 +128,41 @@ export function AdvanceOnPosForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [acknowledgedOver, setAcknowledgedOver] = useState(false);
+  const [showSelectionDetail, setShowSelectionDetail] = useState(false);
 
-  // ---------- Derived ----------
-  const filteredCandidates = useMemo(() => {
-    if (!search.trim()) return candidates;
-    const needle = search.trim().toLowerCase();
-    return candidates.filter(
-      (c) =>
-        c.po_number.toLowerCase().includes(needle) ||
-        c.retailer_display.toLowerCase().includes(needle),
-    );
-  }, [candidates, search]);
+  // Refresh the candidate cache whenever the visible page brings in fresh
+  // principal data (e.g. after navigating). Keep the Map in sync so already-
+  // selected rows reflect any updated current_principal_cents from server.
+  useEffect(() => {
+    if (selected.size === 0) return;
+    setSelected((prev) => {
+      let changed = false;
+      const next = new Map(prev);
+      for (const c of candidates) {
+        const existing = next.get(c.id);
+        if (existing && existing.current_principal_cents !== c.current_principal_cents) {
+          next.set(c.id, c);
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [candidates, selected.size]);
 
-  const selectedPos: SelectedPoForAdvance[] = useMemo(() => {
-    return candidates
-      .filter((c) => selectedIds.has(c.id))
-      .map((c) => ({
-        id: c.id,
-        po_value_cents: cents(c.po_value_cents),
-        current_principal_cents: cents(c.current_principal_cents),
-      }));
-  }, [candidates, selectedIds]);
+  // ---------- Aggregates from the SELECTION SET (across pages) ----------
+  const selectedAsAdvanceInputs: SelectedPoForAdvance[] = useMemo(() => {
+    return Array.from(selected.values()).map((c) => ({
+      id: c.id,
+      po_value_cents: cents(c.po_value_cents),
+      current_principal_cents: cents(c.current_principal_cents),
+    }));
+  }, [selected]);
 
   const summary = useMemo(
-    () => summarizeSelectedPos(selectedPos, poAdvanceRateBps ?? 0),
-    [selectedPos, poAdvanceRateBps],
+    () => summarizeSelectedPos(selectedAsAdvanceInputs, poAdvanceRateBps ?? 0),
+    [selectedAsAdvanceInputs, poAdvanceRateBps],
   );
 
-  /**
-   * Resolve the requested advance amount in cents from whichever input mode
-   * the user chose. Returns null when input is invalid (UI shows nothing
-   * downstream).
-   */
   const requestedCents: Cents | null = useMemo(() => {
     if (amountMode === 'percent') {
       const pct = Number(percentInput);
@@ -132,51 +177,100 @@ export function AdvanceOnPosForm({
     return cents(Math.round(dollars * 100));
   }, [amountMode, percentInput, fixedDollarsInput, summary]);
 
-  /** Plan the allocation only when we have a valid amount + selection + rate. */
   const plan: PoAdvancePlan | { error: string } | null = useMemo(() => {
-    if (selectedPos.length === 0) return null;
+    if (selected.size === 0) return null;
     if (poAdvanceRateBps == null) return { error: 'No active rule set.' };
     if (requestedCents == null) return null;
     try {
-      return planPoAdvance(requestedCents, selectedPos, poAdvanceRateBps);
+      return planPoAdvance(requestedCents, selectedAsAdvanceInputs, poAdvanceRateBps);
     } catch (e) {
       return { error: e instanceof Error ? e.message : 'Allocation failed.' };
     }
-  }, [selectedPos, poAdvanceRateBps, requestedCents]);
+  }, [selected.size, poAdvanceRateBps, requestedCents, selectedAsAdvanceInputs]);
 
   const allocationsValid = plan != null && !('error' in plan);
 
   // ---------- Selection helpers ----------
-  function toggleOne(id: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+  function toggleOne(po: CandidatePo) {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (next.has(po.id)) next.delete(po.id);
+      else next.set(po.id, po);
       return next;
     });
   }
   function toggleAllInView() {
-    const allInViewIds = filteredCandidates.map((c) => c.id);
-    const allSelected = allInViewIds.every((id) => selectedIds.has(id));
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (allSelected) {
-        for (const id of allInViewIds) next.delete(id);
+    const allInViewSelected = candidates.every((c) => selected.has(c.id));
+    setSelected((prev) => {
+      const next = new Map(prev);
+      if (allInViewSelected) {
+        for (const c of candidates) next.delete(c.id);
       } else {
-        for (const id of allInViewIds) next.add(id);
+        for (const c of candidates) next.set(c.id, c);
       }
       return next;
     });
   }
   function clearSelection() {
-    setSelectedIds(new Set());
+    setSelected(new Map());
+  }
+  function removeFromSelection(id: string) {
+    setSelected((prev) => {
+      const next = new Map(prev);
+      next.delete(id);
+      return next;
+    });
+  }
+
+  // ---------- URL navigation helpers ----------
+  function buildHref(overrides: Record<string, string | number | null>): string {
+    const params = new URLSearchParams();
+    for (const [k, v] of Object.entries(rawSearchParams)) {
+      if (k in overrides) continue;
+      if (v) params.set(k, v);
+    }
+    for (const [k, v] of Object.entries(overrides)) {
+      if (v == null || v === '') continue;
+      params.set(k, String(v));
+    }
+    const qs = params.toString();
+    return `/clients/${clientId}/advances/po/new${qs ? `?${qs}` : ''}`;
+  }
+
+  function applyFilters(payload: {
+    q: string;
+    retailer: string;
+    batch: string;
+    status: string;
+    valueMin: string;
+    valueMax: string;
+    pageSize: string;
+  }) {
+    // Filter changes reset to page 1 but keep sort.
+    const overrides: Record<string, string | number | null> = {
+      q: payload.q || null,
+      retailer: payload.retailer || null,
+      batch: payload.batch || null,
+      status: payload.status || null,
+      valueMin: payload.valueMin || null,
+      valueMax: payload.valueMax || null,
+      pageSize: payload.pageSize,
+      page: 1,
+    };
+    router.push(buildHref(overrides));
+  }
+
+  function clearFilters() {
+    router.push(`/clients/${clientId}/advances/po/new`);
   }
 
   // ---------- Commit ----------
   async function onCommit() {
     if (!allocationsValid || !plan || 'error' in plan) return;
     if (plan.any_over_advanced && !acknowledgedOver) {
-      setError('One or more POs would exceed 100% of their value. Tick the acknowledgement checkbox to proceed anyway.');
+      setError(
+        'One or more POs would exceed 100% of their value. Tick the acknowledgement checkbox to proceed anyway.',
+      );
       return;
     }
     if (batchMode === 'existing' && !existingBatchId) {
@@ -209,106 +303,209 @@ export function AdvanceOnPosForm({
     router.refresh();
   }
 
+  const totalPages = Math.max(1, Math.ceil(totalCount / currentFilters.page_size));
+  const firstShown = totalCount === 0 ? 0 : (currentFilters.page - 1) * currentFilters.page_size + 1;
+  const lastShown = Math.min(currentFilters.page * currentFilters.page_size, totalCount);
+
   return (
     <div className="space-y-8">
       {/* ---------- Section 1: Select POs ---------- */}
       <section>
         <SectionHeader number={1} title="Select Purchase Orders" />
-        <div className="rounded-lg border border-seaking-border bg-seaking-surface p-4">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <input
-              type="search"
-              placeholder="Filter by PO # or retailer…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-72 rounded border border-seaking-border px-3 py-1.5 text-sm outline-none focus:border-seaking-navy"
-            />
-            <div className="flex gap-2 text-xs">
-              <button
-                type="button"
-                onClick={toggleAllInView}
-                className="rounded border border-seaking-border bg-white px-2 py-1 text-xs hover:bg-seaking-bg"
-              >
-                {filteredCandidates.every((c) => selectedIds.has(c.id))
-                  ? 'Deselect all in view'
-                  : 'Select all in view'}
-              </button>
+
+        <FilterForm
+          retailers={retailers}
+          batches={batches}
+          statuses={statuses}
+          pageSizeOptions={pageSizeOptions}
+          initial={currentFilters}
+          onApply={applyFilters}
+          onClear={clearFilters}
+        />
+
+        <div className="mt-3 overflow-hidden rounded border border-seaking-border bg-seaking-surface">
+          <table className="w-full text-sm">
+            <thead className="bg-seaking-bg text-[10px] uppercase tracking-wider text-seaking-muted">
+              <tr>
+                <th className="w-8 px-3 py-2">
+                  <input
+                    type="checkbox"
+                    checked={candidates.length > 0 && candidates.every((c) => selected.has(c.id))}
+                    onChange={toggleAllInView}
+                    className="h-4 w-4"
+                    aria-label="Toggle all rows in view"
+                  />
+                </th>
+                <SortHeader
+                  label="PO #"
+                  sortKey="po_number"
+                  currentSort={currentFilters.sort}
+                  currentDir={currentFilters.dir}
+                  buildHref={buildHref}
+                />
+                <Th>Retailer</Th>
+                <Th>Status</Th>
+                <SortHeader
+                  label="Batch"
+                  sortKey="batch"
+                  currentSort={currentFilters.sort}
+                  currentDir={currentFilters.dir}
+                  buildHref={buildHref}
+                />
+                <SortHeader
+                  label="Issued"
+                  sortKey="issuance_date"
+                  currentSort={currentFilters.sort}
+                  currentDir={currentFilters.dir}
+                  buildHref={buildHref}
+                />
+                <SortHeader
+                  label="Req. Delivery"
+                  sortKey="delivery_date"
+                  currentSort={currentFilters.sort}
+                  currentDir={currentFilters.dir}
+                  buildHref={buildHref}
+                />
+                <SortHeader
+                  label="PO value"
+                  sortKey="value"
+                  align="right"
+                  currentSort={currentFilters.sort}
+                  currentDir={currentFilters.dir}
+                  buildHref={buildHref}
+                />
+                <Th className="text-right">Current principal</Th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-seaking-border">
+              {candidates.length === 0 && (
+                <tr>
+                  <td colSpan={9} className="px-3 py-8 text-center text-xs text-seaking-muted">
+                    No POs match the current filters.
+                  </td>
+                </tr>
+              )}
+              {candidates.map((c) => (
+                <tr
+                  key={c.id}
+                  className={selected.has(c.id) ? 'bg-blue-50' : 'hover:bg-seaking-bg'}
+                >
+                  <td className="px-3 py-2">
+                    <input
+                      type="checkbox"
+                      checked={selected.has(c.id)}
+                      onChange={() => toggleOne(c)}
+                      className="h-4 w-4"
+                    />
+                  </td>
+                  <td className="px-3 py-2 font-mono text-xs">{c.po_number}</td>
+                  <td className="px-3 py-2 text-xs">{c.retailer_display}</td>
+                  <td className="px-3 py-2 text-xs">{humanStatus(c.status)}</td>
+                  <td className="px-3 py-2 text-xs">
+                    {c.current_batch_label ?? <span className="text-seaking-muted">—</span>}
+                  </td>
+                  <td className="px-3 py-2 text-xs">{c.issuance_date ?? '—'}</td>
+                  <td className="px-3 py-2 text-xs">{c.requested_delivery_date ?? '—'}</td>
+                  <td className="px-3 py-2 text-right text-xs">
+                    {displayCents(c.po_value_cents)}
+                  </td>
+                  <td className="px-3 py-2 text-right text-xs">
+                    {displayCents(c.current_principal_cents)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <Pagination
+          buildHref={buildHref}
+          page={currentFilters.page}
+          totalPages={totalPages}
+          firstShown={firstShown}
+          lastShown={lastShown}
+          totalRows={totalCount}
+        />
+
+        {/* Selection summary always visible — count + cumulative metrics + clear */}
+        {selected.size > 0 && (
+          <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div className="text-sm font-medium text-seaking-navy">
+                {selected.size.toLocaleString('en-US')} PO{selected.size === 1 ? '' : 's'} selected
+                {' '}
+                <button
+                  type="button"
+                  onClick={() => setShowSelectionDetail((v) => !v)}
+                  className="ml-1 text-xs font-normal text-seaking-navy underline hover:no-underline"
+                >
+                  {showSelectionDetail ? 'Hide list' : 'Show list'}
+                </button>
+              </div>
               <button
                 type="button"
                 onClick={clearSelection}
-                className="rounded border border-seaking-border bg-white px-2 py-1 text-xs hover:bg-seaking-bg"
-                disabled={selectedIds.size === 0}
+                className="text-xs text-seaking-muted hover:text-seaking-ink hover:underline"
               >
-                Clear ({selectedIds.size})
+                Clear selection
               </button>
             </div>
-          </div>
-
-          <div className="max-h-96 overflow-auto rounded border border-seaking-border">
-            <table className="w-full text-sm">
-              <thead className="sticky top-0 bg-seaking-bg text-[10px] uppercase tracking-wider text-seaking-muted">
-                <tr>
-                  <th className="w-8 px-3 py-2"></th>
-                  <th className="px-3 py-2 text-left">PO #</th>
-                  <th className="px-3 py-2 text-left">Retailer</th>
-                  <th className="px-3 py-2 text-left">Status</th>
-                  <th className="px-3 py-2 text-left">Batch</th>
-                  <th className="px-3 py-2 text-right">PO value</th>
-                  <th className="px-3 py-2 text-right">Current principal</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-seaking-border">
-                {filteredCandidates.map((c) => (
-                  <tr
-                    key={c.id}
-                    className={
-                      selectedIds.has(c.id) ? 'bg-blue-50' : 'hover:bg-seaking-bg'
-                    }
-                  >
-                    <td className="px-3 py-2">
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(c.id)}
-                        onChange={() => toggleOne(c.id)}
-                        className="h-4 w-4"
-                      />
-                    </td>
-                    <td className="px-3 py-2 font-mono text-xs">{c.po_number}</td>
-                    <td className="px-3 py-2 text-xs">{c.retailer_display}</td>
-                    <td className="px-3 py-2 text-xs">{c.status}</td>
-                    <td className="px-3 py-2 text-xs">
-                      {c.current_batch_label ?? <span className="text-seaking-muted">—</span>}
-                    </td>
-                    <td className="px-3 py-2 text-right text-xs">{displayCents(c.po_value_cents)}</td>
-                    <td className="px-3 py-2 text-right text-xs">
-                      {displayCents(c.current_principal_cents)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <p className="mt-2 text-xs text-seaking-muted">
-            Showing {filteredCandidates.length.toLocaleString('en-US')} of{' '}
-            {candidates.length.toLocaleString('en-US')} eligible POs.
-          </p>
-        </div>
-
-        {selectedIds.size > 0 && (
-          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-5">
-            <Stat label="Selected" value={selectedIds.size.toString()} />
-            <Stat label="Total PO value" value={displayCents(summary.total_po_value_cents)} />
-            <Stat label="Current principal" value={displayCents(summary.total_current_principal_cents)} />
-            <Stat label="Borrowing base available" value={displayCents(summary.total_borrowing_base_available_cents)} />
-            <Stat label="Aggregate ratio" value={formatBpsAsPercent(summary.aggregate_ratio_bps)} />
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <Stat label="Total PO value" value={displayCents(summary.total_po_value_cents)} />
+              <Stat
+                label="Current principal"
+                value={displayCents(summary.total_current_principal_cents)}
+              />
+              <Stat
+                label="Borrowing base available"
+                value={displayCents(summary.total_borrowing_base_available_cents)}
+              />
+              <Stat label="Aggregate ratio" value={formatBpsAsPercent(summary.aggregate_ratio_bps)} />
+            </div>
+            {showSelectionDetail && (
+              <div className="mt-3 max-h-64 overflow-auto rounded border border-blue-200 bg-white">
+                <table className="w-full text-xs">
+                  <thead className="bg-seaking-bg text-[9px] uppercase tracking-wider text-seaking-muted">
+                    <tr>
+                      <th className="px-2 py-1.5 text-left">PO #</th>
+                      <th className="px-2 py-1.5 text-left">Retailer</th>
+                      <th className="px-2 py-1.5 text-right">PO value</th>
+                      <th className="px-2 py-1.5 text-right">Current principal</th>
+                      <th className="w-8 px-2 py-1.5"></th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-blue-100">
+                    {Array.from(selected.values()).map((c) => (
+                      <tr key={c.id}>
+                        <td className="px-2 py-1 font-mono">{c.po_number}</td>
+                        <td className="px-2 py-1">{c.retailer_display}</td>
+                        <td className="px-2 py-1 text-right">{displayCents(c.po_value_cents)}</td>
+                        <td className="px-2 py-1 text-right">
+                          {displayCents(c.current_principal_cents)}
+                        </td>
+                        <td className="px-2 py-1 text-right">
+                          <button
+                            type="button"
+                            onClick={() => removeFromSelection(c.id)}
+                            className="text-seaking-danger hover:underline"
+                            aria-label={`Remove ${c.po_number} from selection`}
+                          >
+                            ×
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
       </section>
 
       {/* ---------- Section 2: Configure ---------- */}
-      <section className={selectedIds.size === 0 ? 'opacity-50 pointer-events-none' : ''}>
-        <SectionHeader number={2} title="Configure" disabled={selectedIds.size === 0} />
+      <section className={selected.size === 0 ? 'pointer-events-none opacity-50' : ''}>
+        <SectionHeader number={2} title="Configure" disabled={selected.size === 0} />
         <div className="rounded-lg border border-seaking-border bg-seaking-surface p-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <div>
@@ -420,12 +617,8 @@ export function AdvanceOnPosForm({
       </section>
 
       {/* ---------- Section 3: Review ---------- */}
-      <section className={!plan || selectedIds.size === 0 ? 'opacity-50 pointer-events-none' : ''}>
-        <SectionHeader
-          number={3}
-          title="Review and commit"
-          disabled={!plan || selectedIds.size === 0}
-        />
+      <section className={!plan || selected.size === 0 ? 'pointer-events-none opacity-50' : ''}>
+        <SectionHeader number={3} title="Review and commit" disabled={!plan || selected.size === 0} />
         {plan && 'error' in plan && (
           <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-seaking-danger">
             {plan.error}
@@ -450,13 +643,12 @@ export function AdvanceOnPosForm({
                 </thead>
                 <tbody className="divide-y divide-seaking-border">
                   {plan.lines.map((line) => {
-                    const po = candidates.find((c) => c.id === line.po_id);
+                    const po = selected.get(line.po_id);
                     return (
-                      <tr
-                        key={line.po_id}
-                        className={line.pro_forma_over_advanced ? 'bg-red-50' : ''}
-                      >
-                        <td className="px-3 py-2 font-mono text-xs">{po?.po_number ?? line.po_id}</td>
+                      <tr key={line.po_id} className={line.pro_forma_over_advanced ? 'bg-red-50' : ''}>
+                        <td className="px-3 py-2 font-mono text-xs">
+                          {po?.po_number ?? line.po_id}
+                        </td>
                         <td className="px-3 py-2 text-right text-xs">
                           {displayCents(line.po_value_cents)}
                         </td>
@@ -525,14 +717,12 @@ export function AdvanceOnPosForm({
             )}
 
             <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => router.push(`/clients/${clientId}`)}
-                disabled={busy}
-                className="rounded border border-seaking-border bg-white px-4 py-2 text-sm font-medium text-seaking-ink transition hover:bg-seaking-bg disabled:opacity-50"
+              <Link
+                href={`/clients/${clientId}`}
+                className="rounded border border-seaking-border bg-white px-4 py-2 text-sm font-medium text-seaking-ink transition hover:bg-seaking-bg"
               >
                 Cancel
-              </button>
+              </Link>
               <button
                 type="button"
                 onClick={onCommit}
@@ -548,6 +738,282 @@ export function AdvanceOnPosForm({
         )}
       </section>
     </div>
+  );
+}
+
+// ============================================================================
+// Sub-components
+// ============================================================================
+
+function FilterForm({
+  retailers,
+  batches,
+  statuses,
+  pageSizeOptions,
+  initial,
+  onApply,
+  onClear,
+}: {
+  retailers: RetailerOption[];
+  batches: BatchOption[];
+  statuses: StatusOption[];
+  pageSizeOptions: number[];
+  initial: CurrentFilters;
+  onApply: (payload: {
+    q: string;
+    retailer: string;
+    batch: string;
+    status: string;
+    valueMin: string;
+    valueMax: string;
+    pageSize: string;
+  }) => void;
+  onClear: () => void;
+}) {
+  const [q, setQ] = useState(initial.q ?? '');
+  const [retailer, setRetailer] = useState(initial.retailer ?? '');
+  const [batch, setBatch] = useState(initial.batch ?? '');
+  const [status, setStatus] = useState(initial.status ?? '');
+  const [valueMin, setValueMin] = useState(
+    initial.value_min_cents != null ? (initial.value_min_cents / 100).toString() : '',
+  );
+  const [valueMax, setValueMax] = useState(
+    initial.value_max_cents != null ? (initial.value_max_cents / 100).toString() : '',
+  );
+  const [pageSize, setPageSize] = useState(String(initial.page_size));
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onApply({ q, retailer, batch, status, valueMin, valueMax, pageSize });
+      }}
+      className="rounded-lg border border-seaking-border bg-seaking-surface p-4"
+    >
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        <FFieldFor label="PO number">
+          <input
+            type="search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="substring"
+            className="w-full rounded border border-seaking-border px-3 py-1.5 text-sm outline-none focus:border-seaking-navy"
+          />
+        </FFieldFor>
+
+        <FFieldFor label="Retailer">
+          <select
+            value={retailer}
+            onChange={(e) => setRetailer(e.target.value)}
+            className="w-full rounded border border-seaking-border bg-white px-3 py-1.5 text-sm outline-none focus:border-seaking-navy"
+          >
+            <option value="">Any</option>
+            {retailers.map((r) => (
+              <option key={r.slug} value={r.slug}>
+                {r.label}
+              </option>
+            ))}
+          </select>
+        </FFieldFor>
+
+        <FFieldFor label="Batch">
+          <select
+            value={batch}
+            onChange={(e) => setBatch(e.target.value)}
+            className="w-full rounded border border-seaking-border bg-white px-3 py-1.5 text-sm outline-none focus:border-seaking-navy"
+          >
+            <option value="">Any</option>
+            <option value="unassigned">Unassigned</option>
+            {batches.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.label}
+              </option>
+            ))}
+          </select>
+        </FFieldFor>
+
+        <FFieldFor label="Status">
+          <select
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            className="w-full rounded border border-seaking-border bg-white px-3 py-1.5 text-sm outline-none focus:border-seaking-navy"
+          >
+            <option value="">Any eligible (active / partial / closed-awaiting)</option>
+            {statuses.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </FFieldFor>
+
+        <FFieldFor label="PO value ($)">
+          <div className="flex gap-2">
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={valueMin}
+              onChange={(e) => setValueMin(e.target.value)}
+              placeholder="min"
+              className="w-full rounded border border-seaking-border px-2 py-1.5 text-xs outline-none focus:border-seaking-navy"
+            />
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={valueMax}
+              onChange={(e) => setValueMax(e.target.value)}
+              placeholder="max"
+              className="w-full rounded border border-seaking-border px-2 py-1.5 text-xs outline-none focus:border-seaking-navy"
+            />
+          </div>
+        </FFieldFor>
+
+        <FFieldFor label="Rows per page">
+          <select
+            value={pageSize}
+            onChange={(e) => setPageSize(e.target.value)}
+            className="w-full rounded border border-seaking-border bg-white px-3 py-1.5 text-sm outline-none focus:border-seaking-navy"
+          >
+            {pageSizeOptions.map((n) => (
+              <option key={n} value={n}>
+                {n}
+              </option>
+            ))}
+          </select>
+        </FFieldFor>
+      </div>
+
+      <div className="mt-3 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClear}
+          className="rounded border border-seaking-border bg-white px-3 py-1.5 text-sm font-medium text-seaking-ink transition hover:bg-seaking-bg"
+        >
+          Clear
+        </button>
+        <button
+          type="submit"
+          className="rounded bg-seaking-navy px-3 py-1.5 text-sm font-medium text-white transition hover:bg-seaking-navy-hover"
+        >
+          Apply
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function Th({ children, className }: { children?: React.ReactNode; className?: string }) {
+  return (
+    <th className={`px-3 py-2 text-left font-semibold ${className ?? ''}`}>{children}</th>
+  );
+}
+
+function SortHeader({
+  label,
+  sortKey,
+  currentSort,
+  currentDir,
+  buildHref,
+  align,
+}: {
+  label: string;
+  sortKey: string;
+  currentSort: string;
+  currentDir: 'asc' | 'desc';
+  buildHref: (overrides: Record<string, string | number | null>) => string;
+  align?: 'right';
+}) {
+  const isActive = sortKey === currentSort;
+  const nextDir: 'asc' | 'desc' = isActive
+    ? currentDir === 'asc'
+      ? 'desc'
+      : 'asc'
+    : sortKey === 'value' || sortKey === 'issuance_date' || sortKey === 'delivery_date'
+      ? 'desc'
+      : 'asc';
+  const href = buildHref({ sort: sortKey, dir: nextDir, page: 1 });
+
+  return (
+    <th className={`px-3 py-2 font-semibold ${align === 'right' ? 'text-right' : 'text-left'}`}>
+      <Link
+        href={href}
+        className={
+          isActive
+            ? 'inline-flex items-center gap-1 text-seaking-navy hover:underline'
+            : 'inline-flex items-center gap-1 hover:text-seaking-ink hover:underline'
+        }
+      >
+        {label}
+        <span className="text-[8px]">
+          {isActive ? (currentDir === 'asc' ? '▲' : '▼') : '⇅'}
+        </span>
+      </Link>
+    </th>
+  );
+}
+
+function Pagination({
+  buildHref,
+  page,
+  totalPages,
+  firstShown,
+  lastShown,
+  totalRows,
+}: {
+  buildHref: (overrides: Record<string, string | number | null>) => string;
+  page: number;
+  totalPages: number;
+  firstShown: number;
+  lastShown: number;
+  totalRows: number;
+}) {
+  if (totalRows === 0) return null;
+  return (
+    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-seaking-muted">
+      <span>
+        Showing {firstShown.toLocaleString('en-US')}–{lastShown.toLocaleString('en-US')} of{' '}
+        {totalRows.toLocaleString('en-US')}
+      </span>
+      {totalPages > 1 && (
+        <div className="flex items-center gap-1">
+          <PageBtn href={buildHref({ page: 1 })} disabled={page === 1} label="« First" />
+          <PageBtn href={buildHref({ page: page - 1 })} disabled={page === 1} label="‹ Prev" />
+          <span className="px-2">
+            Page {page.toLocaleString('en-US')} of {totalPages.toLocaleString('en-US')}
+          </span>
+          <PageBtn
+            href={buildHref({ page: page + 1 })}
+            disabled={page === totalPages}
+            label="Next ›"
+          />
+          <PageBtn
+            href={buildHref({ page: totalPages })}
+            disabled={page === totalPages}
+            label="Last »"
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PageBtn({ href, disabled, label }: { href: string; disabled: boolean; label: string }) {
+  if (disabled) {
+    return (
+      <span className="cursor-not-allowed rounded border border-seaking-border bg-seaking-bg px-2 py-1 text-xs text-seaking-muted opacity-50">
+        {label}
+      </span>
+    );
+  }
+  return (
+    <Link
+      href={href}
+      className="rounded border border-seaking-border bg-white px-2 py-1 text-xs hover:bg-seaking-bg"
+    >
+      {label}
+    </Link>
   );
 }
 
@@ -571,26 +1037,45 @@ function SectionHeader({
       >
         {number}
       </span>
-      <h2 className="text-sm font-semibold uppercase tracking-wider text-seaking-muted">
-        {title}
-      </h2>
+      <h2 className="text-sm font-semibold uppercase tracking-wider text-seaking-muted">{title}</h2>
     </div>
   );
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded border border-seaking-border bg-seaking-surface p-3">
+    <div className="rounded border border-blue-200 bg-white p-3">
       <div className="text-[10px] uppercase tracking-wider text-seaking-muted">{label}</div>
       <div className="mt-1 text-base font-semibold">{value}</div>
     </div>
   );
 }
 
-/** Today's date in America/New_York as ISO YYYY-MM-DD. */
+function FFieldFor({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <div className="mb-1 text-[10px] font-medium uppercase tracking-wider text-seaking-muted">
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function humanStatus(s: string): string {
+  if (s === 'active') return 'Active';
+  if (s === 'partially_invoiced') return 'Partially Invoiced';
+  if (s === 'closed_awaiting_invoice') return 'Closed — Awaiting Invoice';
+  return s;
+}
+
 function todayInNyIso(): string {
-  // Use Intl.DateTimeFormat for tz-correct day boundaries without pulling in
-  // Temporal in client code.
   const fmt = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'America/New_York',
     year: 'numeric',
