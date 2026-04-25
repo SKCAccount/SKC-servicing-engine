@@ -28,6 +28,15 @@ export const commitPoAdvanceInputSchema = z
      * confirmation modal.
      */
     acknowledged_over_advanced: z.boolean(),
+    /**
+     * Set true when one or more selected POs are currently assigned to a
+     * batch DIFFERENT from the destination batch. Committing the advance
+     * will reassign those POs (and all of their existing committed/funded
+     * advances) to the destination batch — the Manager has to ack this
+     * explicitly because batch-level payment math downstream depends on
+     * which batch each advance lives in.
+     */
+    acknowledged_batch_reassignment: z.boolean(),
   })
   .refine(
     (v) => (v.existing_batch_id !== null) !== v.new_batch,

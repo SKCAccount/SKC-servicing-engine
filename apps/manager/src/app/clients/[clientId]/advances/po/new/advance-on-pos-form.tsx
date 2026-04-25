@@ -128,7 +128,15 @@ export function AdvanceOnPosForm(props: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [acknowledgedOver, setAcknowledgedOver] = useState(false);
+  const [acknowledgedReassignment, setAcknowledgedReassignment] = useState(false);
   const [showSelectionDetail, setShowSelectionDetail] = useState(false);
+
+  // Reset the reassignment ack whenever the destination batch changes — the
+  // affected-POs set depends on the destination, and we shouldn't carry an
+  // ack across a destination change.
+  useEffect(() => {
+    setAcknowledgedReassignment(false);
+  }, [batchMode, existingBatchId]);
 
   // Refresh the candidate cache whenever the visible page brings in fresh
   // principal data (e.g. after navigating). Keep the Map in sync so already-
@@ -189,6 +197,39 @@ export function AdvanceOnPosForm(props: Props) {
   }, [selected.size, poAdvanceRateBps, requestedCents, selectedAsAdvanceInputs]);
 
   const allocationsValid = plan != null && !('error' in plan);
+
+  // ---------- Detect cross-batch reassignment ----------
+  // A reassignment happens when a selected PO is currently in a batch and
+  // the destination batch is different. New batch destination → ANY non-null
+  // current_batch_id triggers. Existing batch destination → any current
+  // batch that isn't the chosen one triggers.
+  const affectedReassignments: Array<{
+    po_number: string;
+    from_batch_label: string;
+    to_batch_label: string;
+  }> = useMemo(() => {
+    if (selected.size === 0) return [];
+    const destinationLabel = batchMode === 'new'
+      ? 'a new batch'
+      : (batches.find((b) => b.id === existingBatchId)?.label ?? '(pick a batch)');
+    const out: Array<{
+      po_number: string;
+      from_batch_label: string;
+      to_batch_label: string;
+    }> = [];
+    for (const c of selected.values()) {
+      if (c.current_batch_id == null) continue; // first-time assignment, no warning
+      if (batchMode === 'existing' && c.current_batch_id === existingBatchId) continue;
+      out.push({
+        po_number: c.po_number,
+        from_batch_label: c.current_batch_label ?? '(unknown batch)',
+        to_batch_label: destinationLabel,
+      });
+    }
+    return out;
+  }, [selected, batchMode, existingBatchId, batches]);
+
+  const reassignmentRequired = affectedReassignments.length > 0;
 
   // ---------- Selection helpers ----------
   function toggleOne(po: CandidatePo) {
@@ -277,6 +318,12 @@ export function AdvanceOnPosForm(props: Props) {
       setError('Pick an existing batch.');
       return;
     }
+    if (reassignmentRequired && !acknowledgedReassignment) {
+      setError(
+        'One or more selected POs are currently assigned to a different batch. Tick the batch-reassignment acknowledgement to proceed.',
+      );
+      return;
+    }
 
     setBusy(true);
     setError(null);
@@ -287,6 +334,7 @@ export function AdvanceOnPosForm(props: Props) {
       new_batch: batchMode === 'new',
       new_batch_name: null,
       acknowledged_over_advanced: acknowledgedOver,
+      acknowledged_batch_reassignment: acknowledgedReassignment,
       allocations: plan.lines
         .filter((l) => (l.newly_assigned_cents as number) > 0)
         .map((l) => ({
@@ -708,6 +756,46 @@ export function AdvanceOnPosForm(props: Props) {
                   advance. They will move to <em>Advances in Bad Standing</em> for remediation.
                 </span>
               </label>
+            )}
+
+            {reassignmentRequired && (
+              <div className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-semibold">
+                  Warning: {affectedReassignments.length} PO
+                  {affectedReassignments.length === 1 ? ' is' : 's are'} currently assigned to a
+                  different batch.
+                </p>
+                <p className="mt-1 text-xs">
+                  Submitting this transaction will shift these POs — and all of their existing
+                  advances — to the destination batch. Each PO can belong to only one batch at
+                  a time. Would you still like to proceed?
+                </p>
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-xs underline">
+                    Show affected POs
+                  </summary>
+                  <ul className="mt-2 max-h-40 overflow-auto rounded border border-amber-200 bg-white p-2 text-xs">
+                    {affectedReassignments.map((r, i) => (
+                      <li key={i} className="py-0.5">
+                        <span className="font-mono">{r.po_number}</span>
+                        <span className="text-seaking-muted">
+                          {' '}
+                          — {r.from_batch_label} → {r.to_batch_label}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+                <label className="mt-3 flex items-center gap-2 text-sm font-medium">
+                  <input
+                    type="checkbox"
+                    checked={acknowledgedReassignment}
+                    onChange={(e) => setAcknowledgedReassignment(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  <span>I acknowledge the batch reassignment and want to proceed.</span>
+                </label>
+              </div>
             )}
 
             {error && (
