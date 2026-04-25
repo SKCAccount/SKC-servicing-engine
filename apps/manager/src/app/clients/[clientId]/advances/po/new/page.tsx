@@ -31,6 +31,9 @@ const SORT_COLUMNS = {
   delivery_date: 'requested_delivery_date',
   batch: 'batch_id',
   uploaded: 'created_at',
+  // Sortable since the page now reads from v_purchase_orders_with_balance
+  // (which exposes per-PO outstanding principal). Per Derek 2026-04-25.
+  current_principal: 'current_principal_cents',
 } as const;
 type SortKey = keyof typeof SORT_COLUMNS;
 
@@ -42,8 +45,14 @@ interface PageProps {
 interface Filters {
   q: string | null;
   retailer: string | null;
-  batch: string | null;
-  status: EligibleStatus | null;
+  /**
+   * Selected batches. Empty array = no batch filter. Special token
+   * 'unassigned' (alongside or instead of UUIDs) means "POs with no batch."
+   * URL: ?batch=id1,id2,unassigned. Multi-select per Derek 2026-04-25.
+   */
+  batches: string[];
+  /** Selected statuses. Empty array = all eligible. Multi-select. */
+  statuses: EligibleStatus[];
   value_min_cents: number | null;
   value_max_cents: number | null;
   sort: SortKey;
@@ -58,6 +67,14 @@ function firstParam(v: string | string[] | undefined): string | null {
   if (s == null) return null;
   const t = s.trim();
   return t === '' ? null : t;
+}
+
+function parseList(raw: string | null): string[] {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 function toCents(v: string | null): number | null {
@@ -79,17 +96,17 @@ function parseFilters(sp: Record<string, string | string[] | undefined>): Filter
     ? (sizeRaw as AllowedPageSize)
     : DEFAULT_PAGE_SIZE;
 
-  const statusRaw = firstParam(sp['status']);
-  const status =
-    statusRaw && (ELIGIBLE_STATUSES as readonly string[]).includes(statusRaw)
-      ? (statusRaw as EligibleStatus)
-      : null;
+  const statusList = parseList(firstParam(sp['status']));
+  const statuses = statusList.filter((s): s is EligibleStatus =>
+    (ELIGIBLE_STATUSES as readonly string[]).includes(s),
+  );
+  const batches = parseList(firstParam(sp['batch']));
 
   return {
     q: firstParam(sp['q']),
     retailer: firstParam(sp['retailer']),
-    batch: firstParam(sp['batch']),
-    status,
+    batches,
+    statuses,
     value_min_cents: toCents(firstParam(sp['valueMin'])),
     value_max_cents: toCents(firstParam(sp['valueMax'])),
     sort,
@@ -146,27 +163,43 @@ export default async function NewPoAdvancePage({ params, searchParams }: PagePro
   const retailerById = new Map(retailers.map((r) => [r.id, r]));
   const batchById = new Map(batches.map((b) => [b.id, b.name]));
 
-  // Build the PO query with filters/sort/page applied. Same surface as
-  // the PO list page so the UX feels consistent.
+  // Build the PO query with filters/sort/page applied. Reads from
+  // v_purchase_orders_with_balance (which pre-joins purchase_orders to a
+  // per-PO aggregate of mv_advance_balances) so we can server-side sort
+  // on current_principal_cents without a separate fetch + in-memory merge.
+  const statusFilterList: string[] =
+    filters.statuses.length > 0
+      ? filters.statuses
+      : [...ELIGIBLE_STATUSES];
+
   let q = supabase
-    .from('purchase_orders')
+    .from('v_purchase_orders_with_balance')
     .select(
-      'id, po_number, status, po_value_cents, retailer_id, batch_id, issuance_date, requested_delivery_date, created_at',
+      'id, po_number, status, po_value_cents, retailer_id, batch_id, current_principal_cents, issuance_date, requested_delivery_date, created_at',
       { count: 'exact' },
     )
     .eq('client_id', clientId)
-    .in(
-      'status',
-      filters.status ? [filters.status] : (ELIGIBLE_STATUSES as readonly string[]),
-    );
+    .in('status', statusFilterList);
 
   if (filters.q) q = q.ilike('po_number', `%${filters.q}%`);
   if (filters.retailer) {
     const r = retailers.find((x) => x.name === filters.retailer);
     if (r) q = q.eq('retailer_id', r.id);
   }
-  if (filters.batch === 'unassigned') q = q.is('batch_id', null);
-  else if (filters.batch) q = q.eq('batch_id', filters.batch);
+  // Multi-batch filter. 'unassigned' means batch_id IS NULL; UUIDs are
+  // real batches. Combinations use PostgREST's .or() to express
+  // (batch_id IS NULL) OR (batch_id IN (...)).
+  if (filters.batches.length > 0) {
+    const includeUnassigned = filters.batches.includes('unassigned');
+    const realBatchIds = filters.batches.filter((b) => b !== 'unassigned');
+    if (includeUnassigned && realBatchIds.length === 0) {
+      q = q.is('batch_id', null);
+    } else if (!includeUnassigned && realBatchIds.length > 0) {
+      q = q.in('batch_id', realBatchIds);
+    } else if (includeUnassigned && realBatchIds.length > 0) {
+      q = q.or(`batch_id.is.null,batch_id.in.(${realBatchIds.join(',')})`);
+    }
+  }
   if (filters.value_min_cents != null) q = q.gte('po_value_cents', filters.value_min_cents);
   if (filters.value_max_cents != null) q = q.lte('po_value_cents', filters.value_max_cents);
 
@@ -179,51 +212,40 @@ export default async function NewPoAdvancePage({ params, searchParams }: PagePro
   const { data: poRows, count: totalCount, error } = await q;
   const total = totalCount ?? 0;
 
-  const visibleIds = ((poRows ?? []) as Array<{ id: string }>).map((p) => p.id);
-  const principalByPo = new Map<string, number>();
-  if (visibleIds.length > 0) {
-    const { data: balanceRows } = await supabase
-      .from('mv_advance_balances')
-      .select('purchase_order_id, principal_outstanding_cents')
-      .eq('client_id', clientId)
-      .in('purchase_order_id', visibleIds);
-    for (const row of (balanceRows ?? []) as Array<{
-      purchase_order_id: string;
-      principal_outstanding_cents: number;
-    }>) {
-      principalByPo.set(
-        row.purchase_order_id,
-        (principalByPo.get(row.purchase_order_id) ?? 0) +
-          (row.principal_outstanding_cents ?? 0),
-      );
-    }
-  }
-
   type RawPo = {
-    id: string;
-    po_number: string;
-    status: string;
-    po_value_cents: number;
-    retailer_id: string;
+    id: string | null;
+    po_number: string | null;
+    status: string | null;
+    po_value_cents: number | null;
+    retailer_id: string | null;
     batch_id: string | null;
+    current_principal_cents: number | null;
     issuance_date: string | null;
     requested_delivery_date: string | null;
-    created_at: string;
+    created_at: string | null;
   };
-  const candidates: CandidatePo[] = ((poRows ?? []) as RawPo[]).map((p) => ({
-    id: p.id,
-    po_number: p.po_number,
-    retailer_id: p.retailer_id,
-    retailer_display: retailerById.get(p.retailer_id)?.display_name ?? '?',
-    status: p.status,
-    po_value_cents: p.po_value_cents,
-    current_principal_cents: principalByPo.get(p.id) ?? 0,
-    current_batch_id: p.batch_id,
-    current_batch_label: p.batch_id ? (batchById.get(p.batch_id) ?? null) : null,
-    issuance_date: p.issuance_date,
-    requested_delivery_date: p.requested_delivery_date,
-    created_at: p.created_at,
-  }));
+  const candidates: CandidatePo[] = ((poRows ?? []) as RawPo[]).flatMap((p) => {
+    if (!p.id || !p.po_number || !p.status || p.po_value_cents == null
+        || !p.retailer_id || !p.created_at) {
+      // The view is RLS-scoped so columns aren't truly nullable in practice,
+      // but Supabase types view columns as nullable. Skip any partial row.
+      return [];
+    }
+    return [{
+      id: p.id,
+      po_number: p.po_number,
+      retailer_id: p.retailer_id,
+      retailer_display: retailerById.get(p.retailer_id)?.display_name ?? '?',
+      status: p.status,
+      po_value_cents: p.po_value_cents,
+      current_principal_cents: p.current_principal_cents ?? 0,
+      current_batch_id: p.batch_id,
+      current_batch_label: p.batch_id ? (batchById.get(p.batch_id) ?? null) : null,
+      issuance_date: p.issuance_date,
+      requested_delivery_date: p.requested_delivery_date,
+      created_at: p.created_at,
+    }];
+  });
 
   return (
     <main className="mx-auto max-w-6xl p-6">
@@ -275,8 +297,8 @@ export default async function NewPoAdvancePage({ params, searchParams }: PagePro
         currentFilters={{
           q: filters.q,
           retailer: filters.retailer,
-          batch: filters.batch,
-          status: filters.status,
+          batches: filters.batches,
+          statuses: filters.statuses,
           value_min_cents: filters.value_min_cents,
           value_max_cents: filters.value_max_cents,
           sort: filters.sort,

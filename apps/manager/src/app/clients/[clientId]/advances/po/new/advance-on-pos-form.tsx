@@ -75,8 +75,10 @@ interface StatusOption {
 interface CurrentFilters {
   q: string | null;
   retailer: string | null;
-  batch: string | null;
-  status: string | null;
+  /** Empty = no filter; 'unassigned' (alongside or instead of UUIDs) = no batch. */
+  batches: string[];
+  /** Empty = all eligible. */
+  statuses: string[];
   value_min_cents: number | null;
   value_max_cents: number | null;
   sort: string;
@@ -281,8 +283,8 @@ export function AdvanceOnPosForm(props: Props) {
     const filterPayload: FetchMatchingPosFilter = {
       q: currentFilters.q,
       retailer_slug: currentFilters.retailer,
-      batch_id: currentFilters.batch,
-      status: currentFilters.status,
+      batches: currentFilters.batches,
+      statuses: currentFilters.statuses,
       value_min_cents: currentFilters.value_min_cents,
       value_max_cents: currentFilters.value_max_cents,
     };
@@ -331,18 +333,19 @@ export function AdvanceOnPosForm(props: Props) {
   function applyFilters(payload: {
     q: string;
     retailer: string;
-    batch: string;
-    status: string;
+    batches: string[];
+    statuses: string[];
     valueMin: string;
     valueMax: string;
     pageSize: string;
   }) {
-    // Filter changes reset to page 1 but keep sort.
+    // Filter changes reset to page 1 but keep sort. Multi-select fields
+    // serialize as comma-joined values; empty array = no filter (null).
     const overrides: Record<string, string | number | null> = {
       q: payload.q || null,
       retailer: payload.retailer || null,
-      batch: payload.batch || null,
-      status: payload.status || null,
+      batch: payload.batches.length > 0 ? payload.batches.join(',') : null,
+      status: payload.statuses.length > 0 ? payload.statuses.join(',') : null,
       valueMin: payload.valueMin || null,
       valueMax: payload.valueMax || null,
       pageSize: payload.pageSize,
@@ -532,7 +535,14 @@ export function AdvanceOnPosForm(props: Props) {
                   currentDir={currentFilters.dir}
                   buildHref={buildHref}
                 />
-                <Th className="text-right">Current principal</Th>
+                <SortHeader
+                  label="Current principal"
+                  sortKey="current_principal"
+                  align="right"
+                  currentSort={currentFilters.sort}
+                  currentDir={currentFilters.dir}
+                  buildHref={buildHref}
+                />
               </tr>
             </thead>
             <tbody className="divide-y divide-seaking-border">
@@ -960,8 +970,8 @@ function FilterForm({
   onApply: (payload: {
     q: string;
     retailer: string;
-    batch: string;
-    status: string;
+    batches: string[];
+    statuses: string[];
     valueMin: string;
     valueMax: string;
     pageSize: string;
@@ -970,8 +980,8 @@ function FilterForm({
 }) {
   const [q, setQ] = useState(initial.q ?? '');
   const [retailer, setRetailer] = useState(initial.retailer ?? '');
-  const [batch, setBatch] = useState(initial.batch ?? '');
-  const [status, setStatus] = useState(initial.status ?? '');
+  const [selBatches, setSelBatches] = useState<string[]>(initial.batches);
+  const [selStatuses, setSelStatuses] = useState<string[]>(initial.statuses);
   const [valueMin, setValueMin] = useState(
     initial.value_min_cents != null ? (initial.value_min_cents / 100).toString() : '',
   );
@@ -984,7 +994,15 @@ function FilterForm({
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        onApply({ q, retailer, batch, status, valueMin, valueMax, pageSize });
+        onApply({
+          q,
+          retailer,
+          batches: selBatches,
+          statuses: selStatuses,
+          valueMin,
+          valueMax,
+          pageSize,
+        });
       }}
       className="rounded-lg border border-seaking-border bg-seaking-surface p-4"
     >
@@ -1014,35 +1032,47 @@ function FilterForm({
           </select>
         </FFieldFor>
 
-        <FFieldFor label="Batch">
+        <FFieldFor label="Batch (Cmd/Ctrl-click for multi)">
           <select
-            value={batch}
-            onChange={(e) => setBatch(e.target.value)}
-            className="w-full rounded border border-seaking-border bg-white px-3 py-1.5 text-sm outline-none focus:border-seaking-navy"
+            multiple
+            value={selBatches}
+            onChange={(e) =>
+              setSelBatches(Array.from(e.target.selectedOptions).map((o) => o.value))
+            }
+            size={5}
+            className="w-full rounded border border-seaking-border bg-white px-2 py-1 text-sm outline-none focus:border-seaking-navy"
           >
-            <option value="">Any</option>
-            <option value="unassigned">Unassigned</option>
+            <option value="unassigned">— Unassigned —</option>
             {batches.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.label}
               </option>
             ))}
           </select>
+          {selBatches.length === 0 && (
+            <p className="mt-1 text-[10px] text-seaking-muted">No selection = all batches</p>
+          )}
         </FFieldFor>
 
-        <FFieldFor label="Status">
+        <FFieldFor label="Status (Cmd/Ctrl-click for multi)">
           <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="w-full rounded border border-seaking-border bg-white px-3 py-1.5 text-sm outline-none focus:border-seaking-navy"
+            multiple
+            value={selStatuses}
+            onChange={(e) =>
+              setSelStatuses(Array.from(e.target.selectedOptions).map((o) => o.value))
+            }
+            size={3}
+            className="w-full rounded border border-seaking-border bg-white px-2 py-1 text-sm outline-none focus:border-seaking-navy"
           >
-            <option value="">Any eligible (active / partial / closed-awaiting)</option>
             {statuses.map((s) => (
               <option key={s.value} value={s.value}>
                 {s.label}
               </option>
             ))}
           </select>
+          {selStatuses.length === 0 && (
+            <p className="mt-1 text-[10px] text-seaking-muted">No selection = all eligible</p>
+          )}
         </FFieldFor>
 
         <FFieldFor label="PO value ($)">
@@ -1128,7 +1158,10 @@ function SortHeader({
     ? currentDir === 'asc'
       ? 'desc'
       : 'asc'
-    : sortKey === 'value' || sortKey === 'issuance_date' || sortKey === 'delivery_date'
+    : sortKey === 'value'
+        || sortKey === 'issuance_date'
+        || sortKey === 'delivery_date'
+        || sortKey === 'current_principal'
       ? 'desc'
       : 'asc';
   const href = buildHref({ sort: sortKey, dir: nextDir, page: 1 });

@@ -287,8 +287,14 @@ const ELIGIBLE_STATUSES = ['active', 'partially_invoiced', 'closed_awaiting_invo
 export interface FetchMatchingPosFilter {
   q: string | null;
   retailer_slug: string | null;
-  batch_id: string | null; // 'unassigned' string OR a UUID OR null
-  status: string | null;
+  /**
+   * Selected batches. Empty array = no batch filter. 'unassigned' (alongside
+   * or instead of UUIDs) means "POs with no batch." Multi-select per Derek
+   * 2026-04-25.
+   */
+  batches: string[];
+  /** Selected statuses. Empty array = all eligible. */
+  statuses: string[];
   value_min_cents: number | null;
   value_max_cents: number | null;
 }
@@ -334,20 +340,41 @@ export async function fetchAllMatchingPoIdsAction(
 
   // Resolve eligible statuses: caller's filter narrows down, otherwise all 3.
   const statusList =
-    filter.status && (ELIGIBLE_STATUSES as readonly string[]).includes(filter.status)
-      ? [filter.status]
+    filter.statuses.length > 0
+      ? filter.statuses.filter((s) => (ELIGIBLE_STATUSES as readonly string[]).includes(s))
       : (ELIGIBLE_STATUSES as readonly string[]);
 
+  // Helper that applies the (potentially multi-value) batch filter to a
+  // PostgREST query builder. Defined inline to keep the function self-
+  // contained (the typed wrapper attempt is documented as a dead end in
+  // CLAUDE.md "DB / SQL pitfalls" notes — inline duplication wins).
+  const applyBatchFilter = <T>(q: T): T => {
+    const builder = q as unknown as {
+      is: (col: string, val: null) => T;
+      in: (col: string, vals: string[]) => T;
+      or: (expr: string) => T;
+    };
+    if (filter.batches.length === 0) return q;
+    const includeUnassigned = filter.batches.includes('unassigned');
+    const realBatchIds = filter.batches.filter((b) => b !== 'unassigned');
+    if (includeUnassigned && realBatchIds.length === 0) return builder.is('batch_id', null);
+    if (!includeUnassigned && realBatchIds.length > 0) return builder.in('batch_id', realBatchIds);
+    return builder.or(`batch_id.is.null,batch_id.in.(${realBatchIds.join(',')})`);
+  };
+
   // Step 1: count first to detect truncation accurately. Same filter set.
+  // Source: v_purchase_orders_with_balance — pre-joins purchase_orders to
+  // a per-PO aggregate of mv_advance_balances. Eliminates the previous
+  // separate-balance-fetch step that was hitting PostgREST's 1000-row
+  // clamp on .in() chunks (the bug Derek hit on 2026-04-25).
   let countQ = supabase
-    .from('purchase_orders')
+    .from('v_purchase_orders_with_balance')
     .select('id', { count: 'exact', head: true })
     .eq('client_id', clientId)
     .in('status', statusList);
   if (filter.q) countQ = countQ.ilike('po_number', `%${filter.q}%`);
   if (retailerId) countQ = countQ.eq('retailer_id', retailerId);
-  if (filter.batch_id === 'unassigned') countQ = countQ.is('batch_id', null);
-  else if (filter.batch_id) countQ = countQ.eq('batch_id', filter.batch_id);
+  countQ = applyBatchFilter(countQ);
   if (filter.value_min_cents != null) countQ = countQ.gte('po_value_cents', filter.value_min_cents);
   if (filter.value_max_cents != null) countQ = countQ.lte('po_value_cents', filter.value_max_cents);
 
@@ -355,28 +382,23 @@ export async function fetchAllMatchingPoIdsAction(
   if (countError) return supabaseError(countError);
   const total = totalCount ?? 0;
 
-  // Step 2: fetch up to hardLimit rows. Supabase/PostgREST defaults to a
-  // max of 1000 rows per response, so a single .limit(5000) gets clamped.
-  // Workaround: split into parallel page-sized requests and merge. Each
-  // page uses .range(start, end) for stable, deterministic slicing because
-  // we ORDER BY id ascending.
-  //
-  // Five concurrent 1k-row requests run roughly as fast as one — the
-  // dominant cost is round-trip latency, not data transfer.
+  // Step 2: fetch up to hardLimit rows. PostgREST clamps at 1000 per
+  // response, so split into parallel page-sized requests and merge.
   const PAGE_SIZE = 1000;
   const targetCount = Math.min(total, hardLimit);
   const pageCount = targetCount > 0 ? Math.ceil(targetCount / PAGE_SIZE) : 0;
 
   type RawPo = {
-    id: string;
-    po_number: string;
-    status: string;
-    po_value_cents: number;
-    retailer_id: string;
+    id: string | null;
+    po_number: string | null;
+    status: string | null;
+    po_value_cents: number | null;
+    retailer_id: string | null;
     batch_id: string | null;
+    current_principal_cents: number | null;
     issuance_date: string | null;
     requested_delivery_date: string | null;
-    created_at: string;
+    created_at: string | null;
   };
 
   const rows: RawPo[] = [];
@@ -385,9 +407,9 @@ export async function fetchAllMatchingPoIdsAction(
       const start = i * PAGE_SIZE;
       const end = Math.min(start + PAGE_SIZE - 1, targetCount - 1);
       let pageQ = supabase
-        .from('purchase_orders')
+        .from('v_purchase_orders_with_balance')
         .select(
-          'id, po_number, status, po_value_cents, retailer_id, batch_id, issuance_date, requested_delivery_date, created_at',
+          'id, po_number, status, po_value_cents, retailer_id, batch_id, current_principal_cents, issuance_date, requested_delivery_date, created_at',
         )
         .eq('client_id', clientId)
         .in('status', statusList)
@@ -395,8 +417,7 @@ export async function fetchAllMatchingPoIdsAction(
         .range(start, end);
       if (filter.q) pageQ = pageQ.ilike('po_number', `%${filter.q}%`);
       if (retailerId) pageQ = pageQ.eq('retailer_id', retailerId);
-      if (filter.batch_id === 'unassigned') pageQ = pageQ.is('batch_id', null);
-      else if (filter.batch_id) pageQ = pageQ.eq('batch_id', filter.batch_id);
+      pageQ = applyBatchFilter(pageQ);
       if (filter.value_min_cents != null)
         pageQ = pageQ.gte('po_value_cents', filter.value_min_cents);
       if (filter.value_max_cents != null)
@@ -410,63 +431,7 @@ export async function fetchAllMatchingPoIdsAction(
     }
   }
 
-  // Step 3: aggregate principal per PO from mv_advance_balances.
-  //
-  // BUG FIX (Derek 2026-04-25): the previous implementation chunked by 500
-  // PO ids and ran `.in('purchase_order_id', chunk)`. mv_advance_balances
-  // has one row per ADVANCE (not per PO), and PostgREST silently clamps
-  // any single response at max-rows = 1000 (CLAUDE.md DB pitfall #5). With
-  // 500 POs averaging 2+ advances each, each chunk's response could hit
-  // the cap, dropping advance rows on the floor and undercounting current
-  // principal. Symptom: "Select all matches" totaled $8,385.56 of current
-  // principal while batch-by-batch sum showed $13,145.65.
-  //
-  // Fix: count first, then parallel-paginate the mv_advance_balances query
-  // for this client by 1000-row pages with .range(start, end). All advances
-  // for the client come back; we filter in memory to the matched PO IDs.
-  // Same pattern as the PO-paging at the top of this action.
-  const principalByPo = new Map<string, number>();
-  if (rows.length > 0) {
-    const matchedPoIdSet = new Set(rows.map((r) => r.id));
-
-    const { count: balanceCount, error: balanceCountError } = await supabase
-      .from('mv_advance_balances')
-      .select('advance_id', { count: 'exact', head: true })
-      .eq('client_id', clientId);
-    if (balanceCountError) return supabaseError(balanceCountError);
-
-    const balanceTotal = balanceCount ?? 0;
-    const BALANCE_PAGE = 1000;
-    const balancePageCount = balanceTotal > 0 ? Math.ceil(balanceTotal / BALANCE_PAGE) : 0;
-    const balanceRequests = Array.from({ length: balancePageCount }, (_, i) => {
-      const start = i * BALANCE_PAGE;
-      const end = start + BALANCE_PAGE - 1;
-      return supabase
-        .from('mv_advance_balances')
-        .select('purchase_order_id, principal_outstanding_cents')
-        .eq('client_id', clientId)
-        .order('advance_id', { ascending: true })
-        .range(start, end);
-    });
-    const balanceResponses = await Promise.all(balanceRequests);
-    for (const res of balanceResponses) {
-      if (res.error) return supabaseError(res.error);
-      for (const row of (res.data ?? []) as Array<{
-        purchase_order_id: string | null;
-        principal_outstanding_cents: number;
-      }>) {
-        if (!row.purchase_order_id) continue; // pre-advances have no PO
-        if (!matchedPoIdSet.has(row.purchase_order_id)) continue;
-        principalByPo.set(
-          row.purchase_order_id,
-          (principalByPo.get(row.purchase_order_id) ?? 0) +
-            (row.principal_outstanding_cents ?? 0),
-        );
-      }
-    }
-  }
-
-  // Step 4: pull retailer + batch labels for display joining.
+  // Step 3: pull retailer + batch labels for display joining.
   const [{ data: retailerList }, { data: batchList }] = await Promise.all([
     supabase.from('retailers').select('id, display_name'),
     supabase
@@ -484,20 +449,29 @@ export async function fetchAllMatchingPoIdsAction(
     ((batchList ?? []) as Array<{ id: string; name: string }>).map((b) => [b.id, b.name]),
   );
 
-  const pos: MatchingPoSummary[] = rows.map((r) => ({
-    id: r.id,
-    po_number: r.po_number,
-    retailer_id: r.retailer_id,
-    retailer_display: retailerById.get(r.retailer_id) ?? '?',
-    status: r.status,
-    po_value_cents: r.po_value_cents,
-    current_principal_cents: principalByPo.get(r.id) ?? 0,
-    current_batch_id: r.batch_id,
-    current_batch_label: r.batch_id ? (batchById.get(r.batch_id) ?? null) : null,
-    issuance_date: r.issuance_date,
-    requested_delivery_date: r.requested_delivery_date,
-    created_at: r.created_at,
-  }));
+  // The view is RLS-scoped (inherits from purchase_orders) so columns
+  // aren't truly nullable in practice, but Supabase types view columns as
+  // nullable. flatMap-skip rows that come back partial.
+  const pos: MatchingPoSummary[] = rows.flatMap((r) => {
+    if (!r.id || !r.po_number || !r.status || r.po_value_cents == null
+        || !r.retailer_id || !r.created_at) {
+      return [];
+    }
+    return [{
+      id: r.id,
+      po_number: r.po_number,
+      retailer_id: r.retailer_id,
+      retailer_display: retailerById.get(r.retailer_id) ?? '?',
+      status: r.status,
+      po_value_cents: r.po_value_cents,
+      current_principal_cents: r.current_principal_cents ?? 0,
+      current_batch_id: r.batch_id,
+      current_batch_label: r.batch_id ? (batchById.get(r.batch_id) ?? null) : null,
+      issuance_date: r.issuance_date,
+      requested_delivery_date: r.requested_delivery_date,
+      created_at: r.created_at,
+    }];
+  });
 
   return ok({
     pos,
