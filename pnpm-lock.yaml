@@ -105,6 +105,9 @@ importers:
       '@seaking/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@seaking/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@seaking/money':
         specifier: workspace:*
         version: link:../../packages/money

@@ -15,6 +15,7 @@
     "@seaking/auth": "workspace:*",
     "@seaking/db": "workspace:*",
     "@seaking/dates": "workspace:*",
+    "@seaking/domain": "workspace:*",
     "@seaking/money": "workspace:*",
     "@seaking/retailer-parsers": "workspace:*",
     "@seaking/ui": "workspace:*",

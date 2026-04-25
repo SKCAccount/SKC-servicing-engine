@@ -4,3 +4,4 @@ export * from './clients';
 export * from './rule-sets';
 export * from './users';
 export * from './po-uploads';
+export * from './advances';

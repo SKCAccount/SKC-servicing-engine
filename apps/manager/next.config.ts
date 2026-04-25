@@ -13,6 +13,7 @@ const config: NextConfig = {
     '@seaking/validators',
     '@seaking/notifications',
     '@seaking/retailer-parsers',
+    '@seaking/domain',
   ],
   experimental: {
     // PO and invoice CSV uploads hit ~1-2 MB routinely. Bump the default

@@ -123,7 +123,13 @@ export default async function ClientDashboardPage({ params }: PageProps) {
           phase="1C"
           live
         />
-        <ActionCard title="Advance on Purchase Orders" phase="1D" />
+        <ActionCard
+          title="Advance on Purchase Orders"
+          description="Pick POs, set amount + date, allocate ratably across the lowest borrowing ratios."
+          href={`/clients/${c.id}/advances/po/new`}
+          phase="1D"
+          live
+        />
         <ActionCard title="Invoice Upload" phase="1E" />
         <ActionCard title="Advance on Accounts Receivable" phase="1E" />
         <ActionCard title="Pre-Advance on Accounts Receivable" phase="1E" />

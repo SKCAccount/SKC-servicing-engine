@@ -20,7 +20,9 @@
       "@seaking/api": ["../../packages/api/src/index.ts"],
       "@seaking/api/*": ["../../packages/api/src/*"],
       "@seaking/retailer-parsers": ["../../packages/retailer-parsers/src/index.ts"],
-      "@seaking/retailer-parsers/*": ["../../packages/retailer-parsers/src/*"]
+      "@seaking/retailer-parsers/*": ["../../packages/retailer-parsers/src/*"],
+      "@seaking/domain": ["../../packages/domain/src/index.ts"],
+      "@seaking/domain/*": ["../../packages/domain/src/*"]
     },
     "jsx": "preserve",
     "noEmit": true,
