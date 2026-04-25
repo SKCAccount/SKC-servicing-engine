@@ -2,37 +2,62 @@ import { createSupabaseServerClient, getCurrentAuthUser } from '@seaking/auth/se
 import { isAdminManager, isManager } from '@seaking/auth';
 import { notFound, redirect } from 'next/navigation';
 import Link from 'next/link';
+import { loadClientPosition } from '@/lib/dashboard-metrics';
+import { DashboardMetrics } from './dashboard-metrics';
+import { DashboardBatchFilter } from './dashboard-batch-filter';
 
 interface PageProps {
   params: Promise<{ clientId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }
 
-export default async function ClientDashboardPage({ params }: PageProps) {
+function firstParam(v: string | string[] | undefined): string | null {
+  if (v == null) return null;
+  const s = Array.isArray(v) ? v[0] : v;
+  if (s == null) return null;
+  const t = s.trim();
+  return t === '' ? null : t;
+}
+
+export default async function ClientDashboardPage({ params, searchParams }: PageProps) {
   const user = await getCurrentAuthUser();
   if (!user) redirect('/login');
   if (!isManager(user.role)) redirect('/login?reason=wrong_app');
 
   const { clientId } = await params;
+  const sp = await searchParams;
+  const batchFilterId = firstParam(sp['batch']);
+
   const supabase = await createSupabaseServerClient();
 
-  const { data: client, error } = await supabase
-    .from('clients')
-    .select('id, legal_name, display_name, status, over_advanced_state, version')
-    .eq('id', clientId)
-    .maybeSingle();
+  const [
+    { data: client, error },
+    { data: currentRuleSet },
+    { data: batchRows },
+    metricsResult,
+  ] = await Promise.all([
+    supabase
+      .from('clients')
+      .select('id, legal_name, display_name, status, over_advanced_state, version')
+      .eq('id', clientId)
+      .maybeSingle(),
+    supabase
+      .from('rule_sets')
+      .select(
+        'id, effective_from, period_1_days, period_1_fee_rate_bps, period_2_days, period_2_fee_rate_bps, subsequent_period_days, subsequent_period_fee_rate_bps, po_advance_rate_bps, ar_advance_rate_bps, pre_advance_rate_bps, ar_aged_out_days, payment_allocation_principal_bps, payment_allocation_fee_bps',
+      )
+      .eq('client_id', clientId)
+      .is('effective_to', null)
+      .maybeSingle(),
+    supabase
+      .from('batches')
+      .select('id, name, batch_number')
+      .eq('client_id', clientId)
+      .order('batch_number', { ascending: false }),
+    loadClientPosition(supabase, clientId, batchFilterId),
+  ]);
 
   if (error || !client) notFound();
-
-  // rule_sets is the per-client fee + borrowing-base + payment-allocation
-  // snapshot. The "current" one is the row with effective_to IS NULL.
-  const { data: currentRuleSet } = await supabase
-    .from('rule_sets')
-    .select(
-      'id, effective_from, period_1_days, period_1_fee_rate_bps, period_2_days, period_2_fee_rate_bps, subsequent_period_days, subsequent_period_fee_rate_bps, po_advance_rate_bps, ar_advance_rate_bps, pre_advance_rate_bps, ar_aged_out_days, payment_allocation_principal_bps, payment_allocation_fee_bps',
-    )
-    .eq('client_id', clientId)
-    .is('effective_to', null)
-    .maybeSingle();
 
   const c = client as {
     id: string;
@@ -43,10 +68,18 @@ export default async function ClientDashboardPage({ params }: PageProps) {
     version: number;
   };
 
+  const batches = (batchRows ?? []) as Array<{
+    id: string;
+    name: string;
+    batch_number: number;
+  }>;
   const canEdit = isAdminManager(user.role);
 
+  const metricsError = 'error' in metricsResult ? metricsResult.error : null;
+  const metrics = 'error' in metricsResult ? null : metricsResult;
+
   return (
-    <main className="mx-auto max-w-5xl p-6">
+    <main className="mx-auto max-w-screen-2xl p-6">
       <header className="mb-6">
         <Link
           href="/clients"
@@ -106,51 +139,78 @@ export default async function ClientDashboardPage({ params }: PageProps) {
         </div>
       )}
 
-      {/* Main Interface actions. Most are stubs that land in their respective
-          phases; PO Upload is live as of Phase 1C. */}
-      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <ActionCard
-          title="Purchase Order Upload"
-          description="Upload Walmart SupplierOne or Generic CSV PO data."
-          href={`/clients/${c.id}/po-uploads/new`}
-          phase="1C"
-          live
-        />
-        <ActionCard
-          title="Purchase Orders"
-          description="Browse every PO on file for this Client with filters."
-          href={`/clients/${c.id}/purchase-orders`}
-          phase="1C"
-          live
-        />
-        <ActionCard
-          title="Advance on Purchase Orders"
-          description="Pick POs, set amount + date, allocate ratably across the lowest borrowing ratios."
-          href={`/clients/${c.id}/advances/po/new`}
-          phase="1D"
-          live
-        />
-        <ActionCard
-          title="Assign Items to a Batch"
-          description="Move outstanding POs (and later invoices + pre-advances) to an existing or new batch."
-          href={`/clients/${c.id}/batches/assign`}
-          phase="1D"
-          live
-        />
-        <ActionCard title="Invoice Upload" phase="1E" />
-        <ActionCard title="Advance on Accounts Receivable" phase="1E" />
-        <ActionCard title="Pre-Advance on Accounts Receivable" phase="1E" />
-        <ActionCard title="Record a Payment" phase="1F" />
-        <ActionCard title="Record a Remittance" phase="1F" />
-        <ActionCard title="Advances in Bad Standing" phase="1G" />
-        <ActionCard title="Advance Requests" phase="1B" />
-        <ActionCard title="Reports & Exports" phase="1H" />
+      {/* ---------- Position metrics ---------- */}
+      <section className="mb-8">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wider text-seaking-muted">
+            Position
+            {metrics?.scope.kind === 'batch' && (
+              <span className="ml-2 normal-case text-seaking-ink">
+                — {metrics.scope.batch_label}
+              </span>
+            )}
+          </h2>
+          {batches.length > 0 && (
+            <DashboardBatchFilter
+              batches={batches.map((b) => ({ id: b.id, label: b.name }))}
+              currentBatchId={batchFilterId}
+            />
+          )}
+        </div>
+
+        {metricsError && (
+          <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-seaking-danger">
+            Failed to load position metrics: {metricsError}
+          </div>
+        )}
+
+        {metrics && <DashboardMetrics data={metrics} />}
       </section>
 
-      <p className="mt-6 text-xs text-seaking-muted">
-        Borrowing-base metrics and principal-outstanding dashboard land in Phase 1D once advances
-        are wired through the event log.
-      </p>
+      {/* ---------- Action cards ---------- */}
+      <section>
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-seaking-muted">
+          Actions
+        </h2>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+          <ActionCard
+            title="Purchase Order Upload"
+            description="Upload Walmart SupplierOne or Generic CSV PO data."
+            href={`/clients/${c.id}/po-uploads/new`}
+            phase="1C"
+            live
+          />
+          <ActionCard
+            title="Purchase Orders"
+            description="Browse every PO on file for this Client with filters."
+            href={`/clients/${c.id}/purchase-orders`}
+            phase="1C"
+            live
+          />
+          <ActionCard
+            title="Advance on Purchase Orders"
+            description="Pick POs, set amount + date, allocate ratably across the lowest borrowing ratios."
+            href={`/clients/${c.id}/advances/po/new`}
+            phase="1D"
+            live
+          />
+          <ActionCard
+            title="Assign Items to a Batch"
+            description="Move outstanding POs (and later invoices + pre-advances) to an existing or new batch."
+            href={`/clients/${c.id}/batches/assign`}
+            phase="1D"
+            live
+          />
+          <ActionCard title="Invoice Upload" phase="1E" />
+          <ActionCard title="Advance on Accounts Receivable" phase="1E" />
+          <ActionCard title="Pre-Advance on Accounts Receivable" phase="1E" />
+          <ActionCard title="Record a Payment" phase="1F" />
+          <ActionCard title="Record a Remittance" phase="1F" />
+          <ActionCard title="Advances in Bad Standing" phase="1G" />
+          <ActionCard title="Advance Requests" phase="1B" />
+          <ActionCard title="Reports & Exports" phase="1H" />
+        </div>
+      </section>
     </main>
   );
 }
