@@ -62,12 +62,14 @@ sea-king-capital-servicing-engine/
 ├── apps/
 │   ├── manager/         — Next.js App Router, Manager UI (port 3000 dev)
 │   ├── client-portal/   — Next.js App Router, Client UI  (port 3001 dev)
-│   └── jobs/            — Supabase Edge Functions (placeholder in 1A/B)
+│   └── jobs/            — Supabase Edge Functions (placeholder; first fn lands later in 1D/E)
 ├── packages/            — Shared libraries (all TS strict)
-│   ├── money/           — Cents type, ratable allocation
-│   ├── dates/           — America/NY helpers, fee-period math
-│   ├── validators/      — Zod schemas for API boundaries
-│   ├── db/              — Supabase client factories
+│   ├── money/           — Cents type, ratable allocation (pure)
+│   ├── dates/           — America/NY helpers, fee-period math (pure)
+│   ├── validators/      — Zod schemas for API boundaries (pure)
+│   ├── domain/          — Borrowing-base + ratio-leveling allocation (pure)
+│   ├── retailer-parsers/— Walmart PO + generic CSV; Kroger PO stubbed (pure)
+│   ├── db/              — Supabase client factories + generated types
 │   ├── auth/            — Supabase Auth wrappers + role helpers
 │   ├── ui/              — cn() + money formatters + (future) shadcn components
 │   ├── api/             — ActionResult<T> primitive
@@ -84,8 +86,10 @@ sea-king-capital-servicing-engine/
 ```
 apps  ───►  packages  ────────►  @supabase/*
             (money, dates,       (external)
-             validators are
-             pure — no I/O)
+             validators,
+             domain,
+             retailer-parsers
+             are pure — no I/O)
           ▲
           │
   packages/ui        packages/auth        packages/db
@@ -94,7 +98,9 @@ apps  ───►  packages  ────────►  @supabase/*
 ```
 
 - `apps/*` can import any `packages/*`.
-- `packages/money`, `packages/dates`, `packages/validators` are **pure** — no I/O, no React. Tests need no mocks.
+- `packages/money`, `packages/dates`, `packages/validators`, `packages/domain`, `packages/retailer-parsers` are **pure** — no I/O, no React. Tests need no mocks. (Invariant #9 / #10 in CLAUDE.md.)
+- `packages/domain` depends on `packages/money` for the deterministic-rounding `allocate` primitive used at the end of ratio leveling. The leveling math itself is local.
+- `packages/retailer-parsers` depends on `packages/dates` (US-format date parsing) and `papaparse` (CSV). No DB, no HTTP, no FS. The upload handler in `apps/manager` owns persistence.
 - `packages/ui` is React. Never imports from `packages/auth` (keeps UI tree-shakable in any app).
 - `packages/auth` has two entry points: `./server` (needs `next/headers`) and `./browser` (needs `'use client'`). The main `packages/auth` module re-exports only the pure role helpers — consumers import directly from `/server` or `/browser` to keep bundles clean.
 - `packages/db` exposes `createBrowserSupabaseClient` (anon key, RLS) and `createServiceRoleClient` (service key, bypasses RLS, server-only). Server-only guard is runtime-enforced.
@@ -249,15 +255,21 @@ This pattern is required because:
 
 ---
 
-## 4. The ledger (when we get there)
-
-_Pending Phase 1D onward. Notes here for planning._
+## 4. The ledger
 
 Every financial mutation inserts a row into `ledger_events`. The table is append-only (enforced by trigger — not even `service_role` can UPDATE or DELETE). Corrections are compensating events: insert a new row with `reverses_event_id = <original>`, and the projection views filter it out via `reversed_by_event_id IS NULL`.
 
 Events carry three signed amounts — `principal_delta_cents`, `fee_delta_cents`, `remittance_delta_cents` — plus nullable FKs to advance_id, invoice_id, batch_id, bank_transaction_id, remittance_id, one_time_fee_id. A CHECK constraint per event type asserts which amounts and FKs are required (see migration 0004's `ledger_events_type_invariants`).
 
-Four materialized views (`mv_advance_balances`, `mv_client_position`, `mv_invoice_aging`, `mv_batch_position`) derive current state. They're refreshed on insert via `pg_notify` + a debounced worker. A daily drift-check rebuilds them from scratch and alerts on mismatch.
+Four materialized views (`mv_advance_balances`, `mv_client_position`, `mv_invoice_aging`, `mv_batch_position`) derive current state. Refresh strategy: today an explicit `refresh_po_projections()` helper is called by RPCs that mutate ledger state (see `commit_po_advance`). The eventual model is `pg_notify` + a debounced worker plus a daily drift-check rebuild — wiring lands later in Phase 1D/E.
+
+### Currently shipped writers
+
+| Writer | Event types emitted | Migration |
+|---|---|---|
+| `commit_po_advance(...)` RPC | `advance_committed` (one per inserted advance, paired 1:1 with the new `advances` row) | 0017 / 0018 |
+
+`commit_po_advance` is the canonical pattern for ledger-writing RPCs: validate inputs → resolve `rule_set_id` and `batch_id` → reassign POs (plus any existing committed/funded advances on those POs, per "advance batch follows PO") → INSERT advances and paired ledger_events in one transaction → call `refresh_po_projections()`. New writers (advance funding, invoice ingestion, payments) should follow this shape. See migrations 0017/0018 for the worked example, including the v2 fix that moves stranded advances when a PO is reassigned mid-flow.
 
 ---
 
@@ -314,14 +326,20 @@ Primary Manager UI. Routes built so far:
 - `/auth/reset-password` — post-recovery password change
 - `/clients` — list (RLS-scoped)
 - `/clients/new` — Admin-only creation
-- `/clients/[clientId]` — per-Client dashboard stub (Main Interface lands in 1C)
+- `/clients/[clientId]` — per-Client dashboard with action cards (the spec's full "Main Interface" metrics block lands in Phase 1D commit 5)
 - `/clients/[clientId]/edit` — Admin-only, optimistic locked
 - `/clients/[clientId]/rules` — Admin-only Borrowing Base + Fee Rules editor
+- `/clients/[clientId]/po-uploads/new` — PO Upload (Walmart auto-detect + generic CSV), two-phase preview → commit
+- `/clients/[clientId]/purchase-orders` — PO list with URL-driven filter/sort/pagination
+- `/clients/[clientId]/advances/po/new` — Advance on POs: multi-page selection, ratio-leveling preview, batch-reassignment ack
 - `/users` — roster + grants table
 - `/users/new` — Admin-only invite
 - `/users/[userId]` — Admin-only edit (self-edit blocked)
+- `/api/po-template/generic` — serves `GENERIC_PO_TEMPLATE_HEADER` from `@seaking/retailer-parsers` as a downloadable CSV. Single source of truth for the template — guaranteed to match what the parser accepts.
 
-Middleware (`apps/manager/middleware.ts`) runs `updateSession` on every non-static request to refresh auth cookies.
+Middleware (`apps/manager/middleware.ts`) runs `updateSession` on every non-static request to refresh auth cookies. `next.config.ts` raises `bodySizeLimit` to 50 MB for the upload routes and lists every workspace package in `transpilePackages`.
+
+**List-page UX conventions** (URL-driven state, server-side sort whitelist, client-side `Map<id, fullData>` selection that survives URL navigations) are documented in CLAUDE.md and applied on the `/purchase-orders` and `/advances/po/new` pages. New list pages should follow the same shape.
 
 ### apps/client-portal
 
@@ -329,7 +347,7 @@ Read-only portal + future advance-request submission. Mirrors the auth routes ab
 
 ### apps/jobs
 
-Empty in Phase 1B. Edge functions arrive in 1C-1H: `daily-fee-accrual`, `aged-out-warning`, `weekly-digest`, `refresh-projections`, `projection-drift-check`.
+Still empty as of Phase 1D commit 3. Edge functions arrive later in 1D-1H: `daily-fee-accrual`, `aged-out-warning`, `weekly-digest`, `refresh-projections`, `projection-drift-check`. Today, `commit_po_advance` calls `refresh_po_projections()` synchronously inline — fine while the only mv writer is the advance-commit path; will need to move to a debounced worker once invoice/payment writers come online.
 
 ---
 
@@ -366,4 +384,10 @@ git commit -m "chore(db): regenerate types after <migration>"
 - RLS is broken → run the query as `postgres` in Studio's SQL editor; if it works there but not in the app, it's a policy issue.
 - Migration rolled back → check whether it used `ALTER TYPE ... ADD VALUE` in the same transaction as a statement that uses the value (split into two migrations).
 - Function "relation does not exist" from a view → add `SET search_path = public` to the function definition.
+- INSERT into RLS-protected table fails from a trigger → mark trigger function `SECURITY DEFINER` + `SET search_path = public` (see migration 0014 pattern).
+- `.limit(N)` for N > 1000 returning only 1000 rows → PostgREST max-rows clamp; parallel-paginate via `.range(start, end)` (see `fetchAllMatchingPoIdsAction`).
+- Bulk DML in PL/pgSQL hitting 60s statement timeout → replace per-row FOR loop with single-statement `INSERT … ON CONFLICT` over `jsonb_array_elements` (see `bulk_upsert_purchase_orders` v2, migration 0016).
+- papaparse silently merging rows → pre-normalize CRLF/CR to LF in `csv.ts` before parsing.
 - Email link bounces to `/login` with no error → check Supabase dashboard redirect allowlist.
+
+CLAUDE.md §"DB / SQL pitfalls" has the long-form rationale for each of these. ARCHITECTURE.md is the cheat sheet.
