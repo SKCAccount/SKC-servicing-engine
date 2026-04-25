@@ -1,39 +1,52 @@
 /**
- * Advance allocation across selected POs.
+ * Advance allocation across selected POs — RATIO LEVELING algorithm.
  *
- * Wraps `allocateLowestFirst` from @seaking/money with the PO-domain types
- * the UI and server actions actually carry. The rule (per spec §Advancing
- * Purchase Orders) is:
+ * Per spec §Advancing Purchase Orders, the goal is to keep per-PO Borrowing
+ * Ratios as low and as EQUAL as possible after the advance, *without*
+ * reassigning principal between POs. The spec wording:
  *
- *   - Of the selected POs, those with the lowest Borrowing Ratio (rounded
- *     to the nearest percent) are ratably assigned the new advance amount.
- *   - As more POs become tied at the rounded ratio, they too participate
- *     in the ratable allocation.
- *   - The goal is keeping per-PO Borrowing Ratios as low as possible
- *     without reassigning principal between POs.
+ *   "Of the selected POs, those with the lowest Borrowing Ratio shall be
+ *    ratably assigned the balance. As more POs become tied with each other
+ *    in Borrowing Ratio, they will also start to be assigned the remaining
+ *    balance ratably."
  *
- * Output share for each PO is in integer cents and the parts sum to the
- * exact `total_cents` requested.
+ * The implementation that matches that intent is *ratio leveling*:
+ *
+ *   1. Identify the POs at the lowest current borrowing ratio.
+ *   2. Bring that group up to the NEXT-LOWEST ratio in the set (or the
+ *      borrowing-rate cap if there is no higher group).
+ *   3. The lifted group joins the next-lowest tier, and we repeat.
+ *   4. Once the requested allocation is exhausted partway through a lift,
+ *      every PO in the current leveling set ends at the same final ratio.
+ *
+ * Concrete example (70% advance rate):
+ *
+ *   PO 1: $1,000 value, $500 principal → 50% ratio, room $200
+ *   PO 2: $800   value, $400 principal → 50% ratio, room $160
+ *   PO 3: $1,200 value,  $0  principal →  0% ratio, room $840
+ *   Allocate $800.
+ *
+ *   Stage 1: PO3 alone at 0%. Cost to lift to 50% = $600. Apply.
+ *           PO3 += $600.  Remaining = $200.
+ *   Stage 2: All three at 50%. Cost to lift to 70% = $200+$160+$240 = $600.
+ *           $200 < $600 → partial lift, ratable by value (5:4:6 ratio).
+ *           PO1 += $66.67, PO2 += $53.33, PO3 += $80.
+ *
+ *   Final ratios: 56.67% / 56.67% / 56.67%, totaling exactly $800.
+ *
+ * Implementation: we find the target ratio R analytically (not iteratively,
+ * which would stall when ratio gaps round to sub-cent costs). Once R is
+ * known, we derive per-PO float ideal allocations and convert to integer
+ * cents via @seaking/money's deterministic `allocate`. The parts sum to the
+ * requested total exactly.
  */
 
-import {
-  allocateLowestFirst,
-  cents,
-  type Allocation,
-  type Cents,
-} from '@seaking/money';
-import {
-  borrowingRatioBps,
-  roundBpsToNearestPercent,
-  singlePoRoomCents,
-} from './borrowing-base';
+import { allocate, cents, type Cents } from '@seaking/money';
+import { borrowingRatioBps, singlePoRoomCents } from './borrowing-base';
 
 export interface SelectedPoForAdvance {
-  /** PO id (becomes the allocation target id). */
   id: string;
-  /** Total dollar value of the PO (canonical, in cents). */
   po_value_cents: Cents;
-  /** Principal already advanced on this PO (sum across all advance series), in cents. */
   current_principal_cents: Cents;
 }
 
@@ -45,57 +58,178 @@ export interface PoAdvanceLine {
   newly_assigned_cents: Cents;
   pro_forma_principal_cents: Cents;
   pro_forma_ratio_bps: number;
-  /** True if this allocation pushes the PO above 100% (Manager alert per spec). */
   pro_forma_over_advanced: boolean;
 }
 
 export interface PoAdvancePlan {
-  /** Total amount being advanced (= sum of all lines' newly_assigned_cents). */
   total_cents: Cents;
-  /** Per-PO breakdown, in input order. */
   lines: PoAdvanceLine[];
-  /** True if any line goes over 100% (UI surfaces a warning). */
   any_over_advanced: boolean;
 }
 
 /**
  * Build the per-PO allocation table the Manager sees on the review screen.
  *
- * @param totalCents      The new advance amount in integer cents.
- * @param pos             The POs the Manager selected.
- * @param poAdvanceRateBps Current rule_set's PO advance rate in bps (e.g. 7000 = 70%).
+ * @param totalCents       The new advance amount in integer cents.
+ * @param pos              The POs the Manager selected.
+ * @param poAdvanceRateBps Current rule_set's PO advance rate in bps.
  *
  * Throws RangeError if the requested total exceeds the aggregate available
- * room across all selected POs (caller should validate up front, but this
- * is the safety net).
+ * room across all selected POs.
  */
 export function planPoAdvance(
   totalCents: Cents,
   pos: readonly SelectedPoForAdvance[],
   poAdvanceRateBps: number,
 ): PoAdvancePlan {
-  // Build the input that allocateLowestFirst expects. Each PO carries its
-  // borrowing ratio (used for ranking) and its remaining room (the cap on
-  // how much it can absorb).
-  const targets = pos.map((p) => ({
-    id: p.id,
-    borrowingRatioBps: roundBpsToNearestPercent(
-      borrowingRatioBps(p.current_principal_cents, p.po_value_cents),
-    ),
-    room: singlePoRoomCents(
+  const total = totalCents as number;
+
+  if (pos.length === 0) {
+    if (total !== 0) {
+      throw new RangeError(`planPoAdvance: nonzero total ${total} with no POs`);
+    }
+    return { total_cents: cents(0), lines: [], any_over_advanced: false };
+  }
+  if (total === 0) {
+    return buildPlan(pos, totalCents, new Map());
+  }
+
+  // Per-PO data + current (continuous, float) ratios.
+  type Ent = {
+    p: SelectedPoForAdvance;
+    v: number;
+    /** Continuous ratio in bps. POs whose value is 0 are treated as at-cap. */
+    ratio: number;
+    room: number;
+  };
+  const entries: Ent[] = pos.map((p) => {
+    const v = p.po_value_cents as number;
+    const pp = p.current_principal_cents as number;
+    const room = singlePoRoomCents(
       p.po_value_cents,
       p.current_principal_cents,
       poAdvanceRateBps,
-    ) as number,
-  }));
+    ) as number;
+    return {
+      p,
+      v,
+      ratio: v > 0 ? (pp * 10000) / v : poAdvanceRateBps,
+      room,
+    };
+  });
 
-  // allocateLowestFirst handles the ratable + cascade logic.
-  const allocations: Allocation[] = allocateLowestFirst(totalCents, targets);
-  const byId = new Map(allocations.map((a) => [a.id, a.share as number]));
+  // POs at or above the rate cap have room === 0 — exclude them. They're
+  // already over-extended; the per-PO bad-standing flow handles them.
+  const eligible = entries.filter((e) => e.room > 0);
 
+  const totalRoom = eligible.reduce((a, e) => a + e.room, 0);
+  if (total > totalRoom) {
+    throw new RangeError(
+      `planPoAdvance: cannot allocate ${total} cents; total available capacity is ${totalRoom} cents (POs at borrowing-rate cap or already over-advanced).`,
+    );
+  }
+
+  // ----------------------------------------------------------------------
+  // Find the target ratio R analytically.
+  //
+  // Sort eligible POs by current ratio ascending and group ties into tiers.
+  // Walk segments between consecutive tier ratios. At each segment, the
+  // leveling set has a fixed sum-of-values; raising it by Δratio costs
+  // Δ × ΣV / 10000. Find the segment in which the cumulative cost crosses
+  // `total` and solve for R within that segment.
+  // ----------------------------------------------------------------------
+  const sorted = [...eligible].sort((a, b) => a.ratio - b.ratio);
+
+  const tiers: Array<{ ratio: number; sumV: number }> = [];
+  for (const e of sorted) {
+    const last = tiers[tiers.length - 1];
+    if (last && Math.abs(last.ratio - e.ratio) < 1e-9) {
+      last.sumV += e.v;
+    } else {
+      tiers.push({ ratio: e.ratio, sumV: e.v });
+    }
+  }
+
+  let remaining = total;
+  let prevRatio = tiers[0]!.ratio;
+  let setSumV = tiers[0]!.sumV;
+  let R = prevRatio;
+
+  // Inter-tier segments.
+  for (let i = 1; i < tiers.length; i++) {
+    const nextRatio = tiers[i]!.ratio;
+    const delta = nextRatio - prevRatio;
+    const segmentCost = (delta * setSumV) / 10000;
+    if (segmentCost >= remaining) {
+      R = prevRatio + (remaining * 10000) / setSumV;
+      remaining = 0;
+      break;
+    }
+    remaining -= segmentCost;
+    prevRatio = nextRatio;
+    setSumV += tiers[i]!.sumV;
+    R = prevRatio;
+  }
+
+  // Final segment from the last tier ratio to the rate cap. The totalRoom
+  // check above guarantees this segment can absorb whatever's left.
+  if (remaining > 0) {
+    const delta = poAdvanceRateBps - prevRatio;
+    if (delta > 0 && setSumV > 0) {
+      R = prevRatio + (remaining * 10000) / setSumV;
+    } else {
+      R = poAdvanceRateBps;
+    }
+    remaining = 0;
+  }
+
+  // ----------------------------------------------------------------------
+  // Per-PO float ideal: max(0, R - ratio) × v / 10000.
+  // Convert to integer cents via deterministic ratable allocation.
+  // ----------------------------------------------------------------------
+  const ideals = new Map<string, number>();
+  for (const e of eligible) {
+    ideals.set(e.p.id, Math.max(0, ((R - e.ratio) * e.v) / 10000));
+  }
+  const targetSet = eligible.filter((e) => (ideals.get(e.p.id) ?? 0) > 0);
+
+  const allocationById = new Map<string, number>();
+
+  if (targetSet.length === 0) {
+    // R sat at the lowest tier (no lift needed). Defensive fallback —
+    // shouldn't happen when total > 0 and we passed the room check.
+    for (const e of eligible) allocationById.set(e.p.id, 0);
+  } else {
+    // Scale ideals to large integer weights so the deterministic rounder
+    // can distribute `total` proportional to the float ideals. Sub-cent
+    // precision via 1e6 multiplier; max(1, ...) avoids weight=0 for any
+    // PO that should get *some* share.
+    const totalIdeal = targetSet.reduce((a, e) => a + (ideals.get(e.p.id) ?? 0), 0);
+    const SCALE = 1e6;
+    const allocations = allocate(
+      cents(total),
+      targetSet.map((e) => ({
+        id: e.p.id,
+        weight: Math.max(1, Math.round(((ideals.get(e.p.id) ?? 0) / totalIdeal) * SCALE)),
+      })),
+    );
+    for (const a of allocations) {
+      allocationById.set(a.id, a.share as number);
+    }
+  }
+
+  return buildPlan(pos, totalCents, allocationById);
+}
+
+/** Assemble the PoAdvancePlan output from per-PO allocations. */
+function buildPlan(
+  pos: readonly SelectedPoForAdvance[],
+  totalCents: Cents,
+  allocationById: Map<string, number>,
+): PoAdvancePlan {
   let anyOver = false;
   const lines = pos.map<PoAdvanceLine>((p) => {
-    const newlyAssigned = byId.get(p.id) ?? 0;
+    const newlyAssigned = allocationById.get(p.id) ?? 0;
     const proFormaPrincipal = (p.current_principal_cents as number) + newlyAssigned;
     const currentRatioBps = borrowingRatioBps(p.current_principal_cents, p.po_value_cents);
     const proFormaRatioBps = borrowingRatioBps(cents(proFormaPrincipal), p.po_value_cents);
@@ -112,24 +246,18 @@ export function planPoAdvance(
       pro_forma_over_advanced: overAdvanced,
     };
   });
-
-  return {
-    total_cents: totalCents,
-    lines,
-    any_over_advanced: anyOver,
-  };
+  return { total_cents: totalCents, lines, any_over_advanced: anyOver };
 }
 
-/**
- * Aggregate metrics across a set of POs, for the "summary at top of review
- * screen" the spec calls for. Returns un-allocated values (just sums).
- */
+// --------------------------------------------------------------------------
+// summarizeSelectedPos — unchanged
+// --------------------------------------------------------------------------
+
 export interface SelectedPosSummary {
   total_po_value_cents: Cents;
   total_current_principal_cents: Cents;
   total_borrowing_base_cents: Cents;
   total_borrowing_base_available_cents: Cents;
-  /** Aggregate ratio: sum(principal) / sum(value), in bps. */
   aggregate_ratio_bps: number;
 }
 

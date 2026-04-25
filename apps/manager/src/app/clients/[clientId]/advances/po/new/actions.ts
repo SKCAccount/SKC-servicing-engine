@@ -3,22 +3,25 @@
 /**
  * Server actions for the 'Advance on Purchase Orders' workflow.
  *
- * Two actions:
- *   1. fetchPoAdvanceContextAction — given a list of selected PO ids, return
- *      the data the configure/review steps need: aggregate metrics, current
- *      principal per PO, existing batches, the active rule_set's PO advance
- *      rate. No writes.
+ * Three actions:
+ *   1. fetchPoAdvanceContextAction — currently unused; reserved for the
+ *      CSV-of-PO-numbers secondary entry path.
  *
- *   2. commitPoAdvanceAction — given the planned allocation + advance date +
+ *   2. fetchAllMatchingPoIdsAction — runs the same filter query the page
+ *      runs (without pagination) and returns up to `hardLimit` PO summary
+ *      rows so the UI can let the Manager 'Select all matches' even when
+ *      they span multiple pages.
+ *
+ *   3. commitPoAdvanceAction — given the planned allocation + advance date +
  *      batch choice, call the commit_po_advance RPC, then refresh
  *      projections so the dashboards see the new advance immediately.
  *
  * The allocation itself is computed CLIENT-SIDE via @seaking/domain's
- * planPoAdvance — the server doesn't recompute it. Why: keeping the server
+ * planPoAdvance — the server doesn't recompute it. Keeping the server
  * action thin makes the math testable (domain unit tests cover it) and
  * avoids drift between what the user saw on the review screen and what
  * actually got committed. The server validates each line via the RPC's
- * built-in checks (positive principal, PO belongs to client).
+ * built-in checks.
  */
 
 import { createSupabaseServerClient, requireAuthUser } from '@seaking/auth/server';
@@ -254,5 +257,187 @@ export async function commitPoAdvanceAction(
     batch_id: result.batch_id,
     advance_count: result.advance_count,
     total_cents: result.total_cents,
+  });
+}
+
+// ============================================================================
+// fetchAllMatchingPoIdsAction
+// ============================================================================
+//
+// Runs the same filter query the Advance on POs page runs (minus pagination)
+// and returns up to `hardLimit` matching PO summaries. The form merges the
+// returned rows into its in-memory selection Map so the Manager can select
+// thousands of POs spanning many pages without losing the per-PO data needed
+// for the allocation step.
+//
+// hardLimit is a safety ceiling: if totalCount > hardLimit, we return
+// `truncated: true` and the UI surfaces a warning. 5000 PO rows at ~200B
+// each is ~1 MB over the wire, comfortably within Server Action body limits.
+
+const ELIGIBLE_STATUSES = ['active', 'partially_invoiced', 'closed_awaiting_invoice'] as const;
+
+export interface FetchMatchingPosFilter {
+  q: string | null;
+  retailer_slug: string | null;
+  batch_id: string | null; // 'unassigned' string OR a UUID OR null
+  status: string | null;
+  value_min_cents: number | null;
+  value_max_cents: number | null;
+}
+
+export interface MatchingPoSummary {
+  id: string;
+  po_number: string;
+  retailer_id: string;
+  retailer_display: string;
+  status: string;
+  po_value_cents: number;
+  current_principal_cents: number;
+  current_batch_id: string | null;
+  current_batch_label: string | null;
+  issuance_date: string | null;
+  requested_delivery_date: string | null;
+  created_at: string;
+}
+
+export async function fetchAllMatchingPoIdsAction(
+  clientId: string,
+  filter: FetchMatchingPosFilter,
+  hardLimit: number = 5000,
+): Promise<ActionResult<{ pos: MatchingPoSummary[]; truncated: boolean; totalCount: number }>> {
+  const authz = await authorize(clientId);
+  if (!authz.ok) return authz.err;
+
+  const supabase = await createSupabaseServerClient();
+
+  // Look up the retailer slug → id once. Skip if no filter set.
+  let retailerId: string | null = null;
+  if (filter.retailer_slug) {
+    const { data: r } = await supabase
+      .from('retailers')
+      .select('id')
+      .eq('name', filter.retailer_slug)
+      .maybeSingle();
+    retailerId = (r as { id: string } | null)?.id ?? null;
+    if (!retailerId) {
+      return err('NOT_FOUND', `Retailer "${filter.retailer_slug}" is not registered.`);
+    }
+  }
+
+  // Resolve eligible statuses: caller's filter narrows down, otherwise all 3.
+  const statusList =
+    filter.status && (ELIGIBLE_STATUSES as readonly string[]).includes(filter.status)
+      ? [filter.status]
+      : (ELIGIBLE_STATUSES as readonly string[]);
+
+  // Step 1: count first to detect truncation accurately. Same filter set.
+  let countQ = supabase
+    .from('purchase_orders')
+    .select('id', { count: 'exact', head: true })
+    .eq('client_id', clientId)
+    .in('status', statusList);
+  if (filter.q) countQ = countQ.ilike('po_number', `%${filter.q}%`);
+  if (retailerId) countQ = countQ.eq('retailer_id', retailerId);
+  if (filter.batch_id === 'unassigned') countQ = countQ.is('batch_id', null);
+  else if (filter.batch_id) countQ = countQ.eq('batch_id', filter.batch_id);
+  if (filter.value_min_cents != null) countQ = countQ.gte('po_value_cents', filter.value_min_cents);
+  if (filter.value_max_cents != null) countQ = countQ.lte('po_value_cents', filter.value_max_cents);
+
+  const { count: totalCount, error: countError } = await countQ;
+  if (countError) return supabaseError(countError);
+  const total = totalCount ?? 0;
+
+  // Step 2: fetch up to hardLimit ids/data.
+  let dataQ = supabase
+    .from('purchase_orders')
+    .select(
+      'id, po_number, status, po_value_cents, retailer_id, batch_id, issuance_date, requested_delivery_date, created_at',
+    )
+    .eq('client_id', clientId)
+    .in('status', statusList)
+    .order('id', { ascending: true })
+    .limit(hardLimit);
+  if (filter.q) dataQ = dataQ.ilike('po_number', `%${filter.q}%`);
+  if (retailerId) dataQ = dataQ.eq('retailer_id', retailerId);
+  if (filter.batch_id === 'unassigned') dataQ = dataQ.is('batch_id', null);
+  else if (filter.batch_id) dataQ = dataQ.eq('batch_id', filter.batch_id);
+  if (filter.value_min_cents != null) dataQ = dataQ.gte('po_value_cents', filter.value_min_cents);
+  if (filter.value_max_cents != null) dataQ = dataQ.lte('po_value_cents', filter.value_max_cents);
+
+  const { data: poRows, error: poError } = await dataQ;
+  if (poError) return supabaseError(poError);
+
+  type RawPo = {
+    id: string;
+    po_number: string;
+    status: string;
+    po_value_cents: number;
+    retailer_id: string;
+    batch_id: string | null;
+    issuance_date: string | null;
+    requested_delivery_date: string | null;
+    created_at: string;
+  };
+  const rows = (poRows ?? []) as RawPo[];
+
+  // Step 3: aggregate principal per PO from mv_advance_balances. Chunk
+  // the IN clause to avoid URL length limits.
+  const principalByPo = new Map<string, number>();
+  for (let i = 0; i < rows.length; i += 500) {
+    const chunk = rows.slice(i, i + 500).map((r) => r.id);
+    const { data: balanceRows } = await supabase
+      .from('mv_advance_balances')
+      .select('purchase_order_id, principal_outstanding_cents')
+      .eq('client_id', clientId)
+      .in('purchase_order_id', chunk);
+    for (const row of (balanceRows ?? []) as Array<{
+      purchase_order_id: string;
+      principal_outstanding_cents: number;
+    }>) {
+      principalByPo.set(
+        row.purchase_order_id,
+        (principalByPo.get(row.purchase_order_id) ?? 0) +
+          (row.principal_outstanding_cents ?? 0),
+      );
+    }
+  }
+
+  // Step 4: pull retailer + batch labels for display joining.
+  const [{ data: retailerList }, { data: batchList }] = await Promise.all([
+    supabase.from('retailers').select('id, display_name'),
+    supabase
+      .from('batches')
+      .select('id, name')
+      .eq('client_id', clientId),
+  ]);
+  const retailerById = new Map(
+    ((retailerList ?? []) as Array<{ id: string; display_name: string }>).map((r) => [
+      r.id,
+      r.display_name,
+    ]),
+  );
+  const batchById = new Map(
+    ((batchList ?? []) as Array<{ id: string; name: string }>).map((b) => [b.id, b.name]),
+  );
+
+  const pos: MatchingPoSummary[] = rows.map((r) => ({
+    id: r.id,
+    po_number: r.po_number,
+    retailer_id: r.retailer_id,
+    retailer_display: retailerById.get(r.retailer_id) ?? '?',
+    status: r.status,
+    po_value_cents: r.po_value_cents,
+    current_principal_cents: principalByPo.get(r.id) ?? 0,
+    current_batch_id: r.batch_id,
+    current_batch_label: r.batch_id ? (batchById.get(r.batch_id) ?? null) : null,
+    issuance_date: r.issuance_date,
+    requested_delivery_date: r.requested_delivery_date,
+    created_at: r.created_at,
+  }));
+
+  return ok({
+    pos,
+    truncated: total > hardLimit,
+    totalCount: total,
   });
 }

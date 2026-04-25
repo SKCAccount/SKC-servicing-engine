@@ -36,7 +36,11 @@ import {
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
-import { commitPoAdvanceAction } from './actions';
+import {
+  commitPoAdvanceAction,
+  fetchAllMatchingPoIdsAction,
+  type FetchMatchingPosFilter,
+} from './actions';
 
 export interface CandidatePo {
   id: string;
@@ -263,6 +267,50 @@ export function AdvanceOnPosForm(props: Props) {
     });
   }
 
+  // ---------- Select-all-matches across pages ----------
+  const [selectAllBusy, setSelectAllBusy] = useState(false);
+  const [selectAllError, setSelectAllError] = useState<string | null>(null);
+  const [selectAllNotice, setSelectAllNotice] = useState<string | null>(null);
+
+  async function selectAllMatches() {
+    setSelectAllBusy(true);
+    setSelectAllError(null);
+    setSelectAllNotice(null);
+    const filterPayload: FetchMatchingPosFilter = {
+      q: currentFilters.q,
+      retailer_slug: currentFilters.retailer,
+      batch_id: currentFilters.batch,
+      status: currentFilters.status,
+      value_min_cents: currentFilters.value_min_cents,
+      value_max_cents: currentFilters.value_max_cents,
+    };
+    const result = await fetchAllMatchingPoIdsAction(clientId, filterPayload);
+    if (!result.ok) {
+      setSelectAllError(result.error.message);
+      setSelectAllBusy(false);
+      return;
+    }
+    setSelected((prev) => {
+      const next = new Map(prev);
+      for (const c of result.data.pos) {
+        // Server returns MatchingPoSummary which has the same shape as
+        // CandidatePo, so we can store it directly.
+        next.set(c.id, c as CandidatePo);
+      }
+      return next;
+    });
+    if (result.data.truncated) {
+      setSelectAllNotice(
+        `Selected ${result.data.pos.length.toLocaleString('en-US')} POs. The match set has ${result.data.totalCount.toLocaleString('en-US')} total — capped at ${result.data.pos.length.toLocaleString('en-US')} per request. Narrow the filter and retry to capture the rest.`,
+      );
+    } else {
+      setSelectAllNotice(
+        `Selected all ${result.data.pos.length.toLocaleString('en-US')} matches.`,
+      );
+    }
+    setSelectAllBusy(false);
+  }
+
   // ---------- URL navigation helpers ----------
   function buildHref(overrides: Record<string, string | number | null>): string {
     const params = new URLSearchParams();
@@ -370,6 +418,50 @@ export function AdvanceOnPosForm(props: Props) {
           onApply={applyFilters}
           onClear={clearFilters}
         />
+
+        {/* Select-all-matches banner: visible whenever the filtered set is
+            larger than what's on the current page. The 'select all in view'
+            checkbox in the table header still works — this is the second
+            affordance for multi-page selection. */}
+        {totalCount > candidates.length && (
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded border border-blue-200 bg-blue-50 px-4 py-2 text-sm">
+            <span className="text-seaking-muted">
+              The current filter matches{' '}
+              <strong className="text-seaking-ink">
+                {totalCount.toLocaleString('en-US')}
+              </strong>{' '}
+              POs across all pages.
+            </span>
+            <button
+              type="button"
+              onClick={selectAllMatches}
+              disabled={selectAllBusy}
+              className="rounded bg-seaking-navy px-3 py-1 text-xs font-medium text-white transition hover:bg-seaking-navy-hover disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {selectAllBusy
+                ? 'Loading…'
+                : `Select all ${totalCount.toLocaleString('en-US')} matches`}
+            </button>
+          </div>
+        )}
+
+        {selectAllNotice && (
+          <div
+            className="mt-2 rounded border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs text-seaking-success"
+            role="status"
+          >
+            {selectAllNotice}
+          </div>
+        )}
+
+        {selectAllError && (
+          <div
+            className="mt-2 rounded border border-red-200 bg-red-50 px-3 py-1.5 text-xs text-seaking-danger"
+            role="alert"
+          >
+            {selectAllError}
+          </div>
+        )}
 
         <div className="mt-3 overflow-hidden rounded border border-seaking-border bg-seaking-surface">
           <table className="w-full text-sm">
