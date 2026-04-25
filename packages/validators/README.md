@@ -8,13 +8,31 @@ Every server action, route handler, and Edge Function must validate its inputs b
 
 ## Public API
 
-Re-exports `zod` plus shared primitives:
+Re-exports `zod` plus the schemas listed below. Import from the package root:
+
+```ts
+import { z, isoDateSchema, centsSchema, uuidSchema, ... } from '@seaking/validators';
+```
+
+### Primitives (`src/primitives.ts`)
 
 - `isoDateSchema` — "YYYY-MM-DD"
 - `centsSchema`, `signedCentsSchema` — integer cents
 - `bpsSchema` — basis points 0-10000
 - `uuidSchema`
 - `nonEmptyStringSchema`
+
+### Workflow schemas
+
+| Module | Exports | Used by |
+|---|---|---|
+| `src/clients.ts` | `clientStatusSchema`, `createClientInputSchema`, `updateClientInputSchema` | Client CRUD server actions |
+| `src/rule-sets.ts` | `ruleSetInputSchema` plus `pctToBps` / `bpsToPct` helpers | Borrowing-base + Fee Rules editor |
+| `src/users.ts` | `userRoleSchema`, `inviteUserInputSchema`, `updateUserInputSchema` | User invitation + edit flows |
+| `src/po-uploads.ts` | `retailerSlugSchema`, `poUploadContextSchema`, plus `PoUploadPreview` / `PoUploadCommitResult` types | PO upload preview + commit actions |
+| `src/advances.ts` | `advanceAllocationSchema`, `commitPoAdvanceInputSchema` | Advance on POs commit action |
+
+**Convention**: one file per workflow. `src/index.ts` re-exports everything. New workflow → new file → add to index. Avoids a single bloated module as the schema set grows.
 
 ## Usage
 
@@ -29,5 +47,3 @@ const AdvanceInput = z.object({
 
 type AdvanceInput = z.infer<typeof AdvanceInput>;
 ```
-
-Phase 1 schemas for POs, invoices, payments, etc., will be added as each workflow is built. Keep one file per workflow under `src/` to avoid a single bloated module.

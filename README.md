@@ -9,7 +9,7 @@ This will be the source of truth for all financing provided by SKC. It will prov
 - `apps/manager` — primary Manager UI (Next.js App Router).
 - `apps/client-portal` — read-only Client portal + Advance Request form (Next.js App Router).
 - `apps/jobs` — Supabase Edge Functions for scheduled work.
-- `packages/*` — shared libraries: money, dates, validators, db (migrations + types), auth, ui, api, notifications.
+- `packages/*` — shared libraries: money, dates, validators, db (client + types), auth, ui, api, notifications, domain (borrowing-base + advance allocation), retailer-parsers (Walmart PO + generic CSV).
 - `docs/` — functional spec, schema, parser specs, ERDs.
 - `supabase/migrations/` — PostgreSQL migrations applied to the linked project.
 
@@ -58,8 +58,8 @@ pnpm test              # unit tests in every package
 
 ## Build phases
 
-Phase 1A (current): foundation. Monorepo scaffold, migrations committed, login + empty Client Selection screen.
+Currently in **Phase 1D (advances)**. Phase 1A-1C shipped: monorepo scaffold and core libraries (1A); auth completion, Client CRUD, rule-sets editor, user invitation (1B); Walmart + generic CSV PO parsers, PO upload UI, PO list view (1C); domain package, `commit_po_advance` RPC, Advance on POs UI (1D commits 1-3).
 
-Phase 1B-1I: reference data, PO ingestion, advances, invoices, payments/waterfall, bad standing, reports, deploy.
+Coming up: standalone Assign-to-Batch + unified outstanding-items table, dashboard aggregate metrics, then invoice ingestion (Phase 1E).
 
-See `docs/BUILD_PROMPT.md` §5 for the full sequencing.
+See `CLAUDE.md` for the canonical "what's shipped" list and `docs/BUILD_PROMPT.md` §5 for the full sequencing.
