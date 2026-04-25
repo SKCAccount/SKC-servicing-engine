@@ -34,43 +34,60 @@
  *     ranking buckets. Both rounding rules are exposed here.
  */
 
-import { applyBps, cents, subClamped, type Cents } from '@seaking/money';
+import { applyBpsFloor, cents, subClamped, type Cents } from '@seaking/money';
 
 // --------------------------------------------------------------------------
 // Borrowing base
 // --------------------------------------------------------------------------
+//
+// IMPORTANT: every borrowing-base helper FLOORS the result. Per spec
+// clarification (Derek 2026-04-25): each underlying's contribution to the
+// borrowing base is `floor(value × rate / 10000)`, computed PER underlying
+// before summing. Aggregate-then-multiply produces fractional cents and
+// lets the effective per-PO advance rate creep over the cap.
+//
+// The single-PO/AR room helpers below already floor implicitly via
+// applyBpsFloor; aggregate base totals (poBorrowingBase, arBorrowingBase)
+// are intended to be called over per-PO floored sums, NOT over an aggregate
+// value. The cleanest call shape is to compute per-PO base via
+// applyBpsFloor in the caller, then sum.
 
 /**
- * PO Borrowing Base = sum(active PO value) × po_advance_rate_bps / 10000.
- * Apply this against the aggregate active PO value for a Client.
+ * PO Borrowing Base for a single PO = floor(po_value × po_advance_rate_bps / 10000).
+ *
+ * For aggregate Client-level totals, call this per PO and sum the results.
+ * Do NOT pass an aggregate value to this function — that would compute
+ * `floor(sum_value × rate / 10000)` which can exceed the per-PO sum and
+ * over-state the borrowing base by fractional pennies × N POs.
  */
 export function poBorrowingBase(
-  activePoValueCents: Cents,
+  poValueCents: Cents,
   poAdvanceRateBps: number,
 ): Cents {
-  return applyBps(activePoValueCents, poAdvanceRateBps);
+  return applyBpsFloor(poValueCents, poAdvanceRateBps);
 }
 
 /**
- * AR Borrowing Base = sum(eligible invoice value) × ar_advance_rate_bps / 10000.
- * "Eligible" excludes invoices past the aged-out threshold.
+ * AR Borrowing Base for a single invoice = floor(invoice_value × rate / 10000).
+ * Same per-underlying convention as poBorrowingBase.
  */
 export function arBorrowingBase(
-  eligibleArValueCents: Cents,
+  invoiceValueCents: Cents,
   arAdvanceRateBps: number,
 ): Cents {
-  return applyBps(eligibleArValueCents, arAdvanceRateBps);
+  return applyBpsFloor(invoiceValueCents, arAdvanceRateBps);
 }
 
 /**
- * Pre-Advance AR Borrowing Base = sum(eligible AR principal) × pre_advance_rate_bps / 10000.
- * Per resolution 4 (CLAUDE.md), the pool excludes aged-out AR principal.
+ * Pre-Advance AR Borrowing Base contribution from a single eligible AR
+ * principal slice. Per resolution 4 (CLAUDE.md), aged-out AR principal is
+ * excluded from the pool.
  */
 export function preAdvanceBorrowingBase(
   eligibleArPrincipalCents: Cents,
   preAdvanceRateBps: number,
 ): Cents {
-  return applyBps(eligibleArPrincipalCents, preAdvanceRateBps);
+  return applyBpsFloor(eligibleArPrincipalCents, preAdvanceRateBps);
 }
 
 /** Available = base − outstanding, floored at 0. */
@@ -112,18 +129,19 @@ export function formatBpsAsPercent(bps: number): string {
 }
 
 /**
- * "Room" on a single PO = max(0, borrowing-base-on-this-PO − principal-outstanding).
+ * "Room" on a single PO = max(0, floor(po_value × rate / 10000) − principal).
  * Used by the advance-allocation algorithm — see po-advance.ts.
  *
- * The borrowing-base-on-this-PO is the PO's individual contribution:
- *   po_value_cents × po_advance_rate_bps / 10000.
+ * Floor on the per-PO base: per spec, each PO's contribution to the
+ * borrowing base is rounded down to the nearest cent. This guarantees the
+ * pro-forma ratio after a leveling allocation never exceeds the rate cap.
  */
 export function singlePoRoomCents(
   poValueCents: Cents,
   principalOutstandingCents: Cents,
   poAdvanceRateBps: number,
 ): Cents {
-  const baseForPo = applyBps(poValueCents, poAdvanceRateBps);
+  const baseForPo = applyBpsFloor(poValueCents, poAdvanceRateBps);
   return subClamped(baseForPo, principalOutstandingCents);
 }
 
@@ -135,7 +153,7 @@ export function singleArRoomCents(
   principalOutstandingCents: Cents,
   arAdvanceRateBps: number,
 ): Cents {
-  const baseForInvoice = applyBps(invoiceValueCents, arAdvanceRateBps);
+  const baseForInvoice = applyBpsFloor(invoiceValueCents, arAdvanceRateBps);
   return subClamped(baseForInvoice, principalOutstandingCents);
 }
 

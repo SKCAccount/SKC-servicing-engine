@@ -15,6 +15,7 @@ export {
   sub,
   subClamped,
   applyBps,
+  applyBpsFloor,
 } from './cents';
 
 export {

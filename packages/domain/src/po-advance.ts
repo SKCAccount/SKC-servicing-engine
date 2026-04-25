@@ -42,7 +42,7 @@
  */
 
 import { allocate, cents, type Cents } from '@seaking/money';
-import { borrowingRatioBps, singlePoRoomCents } from './borrowing-base';
+import { borrowingRatioBps, poBorrowingBase, singlePoRoomCents } from './borrowing-base';
 
 export interface SelectedPoForAdvance {
   id: string;
@@ -218,6 +218,59 @@ export function planPoAdvance(
     }
   }
 
+  // Per-PO room cap — final safety pass.
+  //
+  // The leveling target ratio R is bounded by poAdvanceRateBps, so the
+  // float ideal for each PO is ≤ (rate × value / 10000) − principal. But
+  // ideal can equal floor(rate × value / 10000) − principal + fractional,
+  // and when the deterministic allocator distributes the +1-cent rounding
+  // remainder, a PO can land 1 cent above its floored room. That single
+  // cent pushes pro_forma_ratio over the rate cap.
+  //
+  // Clamp each PO at its room and redistribute any excess greedily to POs
+  // that still have remaining capacity. This is always feasible because
+  // total ≤ totalRoom = Σ(floored room) was checked at line 126.
+  const roomById = new Map<string, number>();
+  for (const e of eligible) roomById.set(e.p.id, e.room);
+  let excess = 0;
+  for (const e of eligible) {
+    const assigned = allocationById.get(e.p.id) ?? 0;
+    if (assigned > e.room) {
+      excess += assigned - e.room;
+      allocationById.set(e.p.id, e.room);
+    }
+  }
+  if (excess > 0) {
+    // Redistribute excess to POs with remaining capacity. Largest-capacity-
+    // first with id-asc as the deterministic tiebreak (mirrors `allocate`'s
+    // remainder-distribution rule).
+    const candidates = eligible
+      .map((e) => ({
+        id: e.p.id,
+        remaining: e.room - (allocationById.get(e.p.id) ?? 0),
+      }))
+      .filter((c) => c.remaining > 0)
+      .sort((a, b) => {
+        if (b.remaining !== a.remaining) return b.remaining - a.remaining;
+        return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+      });
+    let i = 0;
+    while (excess > 0 && i < candidates.length) {
+      const c = candidates[i]!;
+      const give = Math.min(excess, c.remaining);
+      allocationById.set(c.id, (allocationById.get(c.id) ?? 0) + give);
+      excess -= give;
+      i++;
+    }
+    // If excess > 0 still, total exceeded sum of room — earlier check
+    // should have caught it. Hard error to surface the bug.
+    if (excess > 0) {
+      throw new Error(
+        `planPoAdvance: ${excess} cents could not be distributed within per-PO room caps; algorithm bug`,
+      );
+    }
+  }
+
   return buildPlan(pos, totalCents, allocationById);
 }
 
@@ -267,17 +320,19 @@ export function summarizeSelectedPos(
 ): SelectedPosSummary {
   let totalValue = 0;
   let totalPrincipal = 0;
+  let totalBase = 0;
   let totalRoom = 0;
   for (const p of pos) {
     totalValue += p.po_value_cents as number;
     totalPrincipal += p.current_principal_cents as number;
-    totalRoom += singlePoRoomCents(
-      p.po_value_cents,
-      p.current_principal_cents,
-      poAdvanceRateBps,
-    ) as number;
+    // Per Derek's clarification: each PO's contribution to the borrowing
+    // base is floor(po_value × rate / 10000). Sum the per-PO bases rather
+    // than (sum_value × rate / 10000) — aggregate-then-multiply creates
+    // fractional pennies and lets pro-forma ratio creep above the cap.
+    const baseForPo = poBorrowingBase(p.po_value_cents, poAdvanceRateBps) as number;
+    totalBase += baseForPo;
+    totalRoom += Math.max(0, baseForPo - (p.current_principal_cents as number));
   }
-  const totalBase = Math.round((totalValue * poAdvanceRateBps) / 10000);
   return {
     total_po_value_cents: cents(totalValue),
     total_current_principal_cents: cents(totalPrincipal),

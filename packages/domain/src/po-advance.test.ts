@@ -219,4 +219,39 @@ describe('summarizeSelectedPos', () => {
     expect(s.total_borrowing_base_available_cents).toBe(0);
     expect(s.aggregate_ratio_bps).toBe(0);
   });
+
+  it('per-PO borrowing base is floor(po_value × rate / 10000), not aggregate', () => {
+    // PO value $123.45 at 70% → floor(0.7 × 12345) = floor(8641.5) = 8641, not 8642.
+    const pos: SelectedPoForAdvance[] = [
+      { id: 'a', po_value_cents: cents(12_345), current_principal_cents: cents(0) },
+      { id: 'b', po_value_cents: cents(12_345), current_principal_cents: cents(0) },
+    ];
+    const s = summarizeSelectedPos(pos, 7000);
+    // Per-PO BB = floor(12345 × 7000 / 10000) = floor(8641.5) = 8641 each.
+    // Sum = 17282. Aggregate-then-multiply would have given Math.round(24690 × 0.7) = 17283 (off by 1).
+    expect(s.total_borrowing_base_cents).toBe(17_282);
+    expect(s.total_borrowing_base_available_cents).toBe(17_282);
+  });
+});
+
+describe('planPoAdvance — per-PO room cap (Derek 2026-04-25 regression)', () => {
+  it('never assigns a PO more cents than its floored room', () => {
+    // PO value $123.45 → floor(0.7 × 12345) = 8641 cents room.
+    // Two such POs → totalRoom = 17282. Allocate exactly 17282 (max).
+    // Without the post-clamp pass, deterministic rounding could push one PO
+    // to 8642, putting its pro-forma ratio at 70.005% — over the 70% cap.
+    const pos: SelectedPoForAdvance[] = [
+      { id: 'a', po_value_cents: cents(12_345), current_principal_cents: cents(0) },
+      { id: 'b', po_value_cents: cents(12_345), current_principal_cents: cents(0) },
+    ];
+    const plan = planPoAdvance(cents(17_282), pos, 7000);
+    for (const line of plan.lines) {
+      expect(line.newly_assigned_cents).toBeLessThanOrEqual(8641);
+      // Pro-forma ratio must not exceed the rate cap.
+      expect(line.pro_forma_ratio_bps).toBeLessThanOrEqual(7000);
+    }
+    // Total still adds up exactly.
+    const sum = plan.lines.reduce((a, l) => a + (l.newly_assigned_cents as number), 0);
+    expect(sum).toBe(17_282);
+  });
 });

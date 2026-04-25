@@ -114,7 +114,13 @@ export function fromDollarsNumber(dollars: number): Cents {
 
 /** Convert Cents to a display string "$1,234.56". */
 export function formatDollars(c: Cents | SignedCents): string {
-  const value = c as number;
+  // Defensive floor: callers should always pass integer cents, but if the
+  // value flowed through Postgres `numeric` arithmetic upstream (e.g.
+  // SUM(bigint) returns numeric) it can arrive here with fractional cents.
+  // Without this, value % 100 would be a float and the output would look
+  // like "$2,013,695.72.59999999403954". Floor matches the spec's rule
+  // ("rounded to the nearest cent" — see CLAUDE.md borrowing-base note).
+  const value = Math.floor(c as number);
   const abs = Math.abs(value);
   const whole = Math.floor(abs / 100);
   const fraction = abs % 100;
@@ -176,4 +182,27 @@ export function applyBps(amount: Cents, bps: number): Cents {
   // (amount_cents * bps) / 10000, rounded half-away-from-zero
   const numerator = (amount as number) * bps;
   return cents(Math.round(numerator / 10000));
+}
+
+/**
+ * Multiply cents by a bps rate, FLOORING the result.
+ *
+ * Preferred over applyBps for borrowing-base math: per Derek's spec
+ * clarification, each PO's contribution to the borrowing base is
+ * `floor(po_value × rate / 10000)`, computed PER PO before summing.
+ * Aggregate-then-multiply produces fractional cents and lets the
+ * effective per-PO advance rate creep over the cap.
+ *
+ * Floor is the conservative choice: it never lets the borrowing base
+ * exceed the spec's percentage limit even by a fractional cent.
+ *
+ * Reserve applyBps (round) for fee math, where the spec calls for
+ * rounding to the nearest cent.
+ */
+export function applyBpsFloor(amount: Cents, bps: number): Cents {
+  if (!Number.isInteger(bps) || bps < 0) {
+    throw new RangeError(`applyBpsFloor(): bps must be non-negative integer; got ${bps}`);
+  }
+  const numerator = (amount as number) * bps;
+  return cents(Math.floor(numerator / 10000));
 }
