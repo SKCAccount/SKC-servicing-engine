@@ -29,6 +29,16 @@ import { AssignToBatchForm, type CandidateItem } from './assign-to-batch-form';
 const ELIGIBLE_STATUSES = ['active', 'partially_invoiced', 'closed_awaiting_invoice'] as const;
 type EligibleStatus = (typeof ELIGIBLE_STATUSES)[number];
 
+/**
+ * Item type values render in the Type column. The full set will populate
+ * once invoice ingestion (1E-3) and pre-advance creation ship — today
+ * only PO Advance rows can appear, so the Type filter functionally
+ * collapses to "include or exclude PO Advance," but exists for UX
+ * consistency and to be future-proof.
+ */
+const ITEM_TYPES = ['po_advance', 'ar_advance', 'pre_advance'] as const;
+type ItemType = (typeof ITEM_TYPES)[number];
+
 const ALLOWED_PAGE_SIZES = [25, 50, 100, 250] as const;
 type AllowedPageSize = (typeof ALLOWED_PAGE_SIZES)[number];
 const DEFAULT_PAGE_SIZE: AllowedPageSize = 50;
@@ -53,6 +63,8 @@ interface Filters {
   retailer: string | null;
   batch: string | null;
   status: EligibleStatus | null;
+  /** Multi-select. Empty = no filter (all types). */
+  types: ItemType[];
   value_min_cents: number | null;
   value_max_cents: number | null;
   sort: SortKey;
@@ -67,6 +79,14 @@ function firstParam(v: string | string[] | undefined): string | null {
   if (s == null) return null;
   const t = s.trim();
   return t === '' ? null : t;
+}
+
+function parseList(raw: string | null): string[] {
+  if (!raw) return [];
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 function toCents(v: string | null): number | null {
@@ -94,11 +114,17 @@ function parseFilters(sp: Record<string, string | string[] | undefined>): Filter
       ? (statusRaw as EligibleStatus)
       : null;
 
+  const typeList = parseList(firstParam(sp['type']));
+  const types = typeList.filter((t): t is ItemType =>
+    (ITEM_TYPES as readonly string[]).includes(t),
+  );
+
   return {
     q: firstParam(sp['q']),
     retailer: firstParam(sp['retailer']),
     batch: firstParam(sp['batch']),
     status,
+    types,
     value_min_cents: toCents(firstParam(sp['valueMin'])),
     value_max_cents: toCents(firstParam(sp['valueMax'])),
     sort,
@@ -155,37 +181,17 @@ export default async function AssignToBatchPage({ params, searchParams }: PagePr
   const retailerById = new Map(retailers.map((r) => [r.id, r]));
   const batchById = new Map(batches.map((b) => [b.id, b.name]));
 
-  // Build the items query against v_purchase_orders_with_balance.
-  let q = supabase
-    .from('v_purchase_orders_with_balance')
-    .select(
-      'id, po_number, status, po_value_cents, retailer_id, batch_id, current_principal_cents, fees_outstanding_cents, issuance_date, requested_delivery_date, created_at',
-      { count: 'exact' },
-    )
-    .eq('client_id', clientId)
-    .in(
-      'status',
-      filters.status ? [filters.status] : (ELIGIBLE_STATUSES as readonly string[]),
-    );
-
-  if (filters.q) q = q.ilike('po_number', `%${filters.q}%`);
-  if (filters.retailer) {
-    const r = retailers.find((x) => x.name === filters.retailer);
-    if (r) q = q.eq('retailer_id', r.id);
-  }
-  if (filters.batch === 'unassigned') q = q.is('batch_id', null);
-  else if (filters.batch) q = q.eq('batch_id', filters.batch);
-  if (filters.value_min_cents != null) q = q.gte('po_value_cents', filters.value_min_cents);
-  if (filters.value_max_cents != null) q = q.lte('po_value_cents', filters.value_max_cents);
-
-  q = q.order(SORT_COLUMNS[filters.sort], { ascending: filters.dir === 'asc', nullsFirst: false });
-  q = q.order('id', { ascending: true });
-
-  const offset = (filters.page - 1) * filters.page_size;
-  q = q.range(offset, offset + filters.page_size - 1);
-
-  const { data: rows, count: totalCount, error } = await q;
-  const total = totalCount ?? 0;
+  // Type filter — short-circuit when 'po_advance' is excluded.
+  //
+  // Today the only emitted item type is 'po_advance' (PO rows from
+  // v_purchase_orders_with_balance). Pre-Advance and AR Advance rows
+  // come online in 1E-3 / pre-advance creation. When `filters.types`
+  // is non-empty AND doesn't include 'po_advance', we know the PO query
+  // would contribute zero matching rows, so skip it entirely.
+  //
+  // When 1E-3 lands and we add ar_advance / pre_advance row sources,
+  // each source query needs an analogous gate.
+  const includePoAdvance = filters.types.length === 0 || filters.types.includes('po_advance');
 
   type RawRow = {
     id: string;
@@ -200,6 +206,46 @@ export default async function AssignToBatchPage({ params, searchParams }: PagePr
     requested_delivery_date: string | null;
     created_at: string;
   };
+
+  let rows: RawRow[] | null = null;
+  let totalCount: number | null = 0;
+  let error: { message: string } | null = null;
+  if (includePoAdvance) {
+    let q = supabase
+      .from('v_purchase_orders_with_balance')
+      .select(
+        'id, po_number, status, po_value_cents, retailer_id, batch_id, current_principal_cents, fees_outstanding_cents, issuance_date, requested_delivery_date, created_at',
+        { count: 'exact' },
+      )
+      .eq('client_id', clientId)
+      .in(
+        'status',
+        filters.status ? [filters.status] : (ELIGIBLE_STATUSES as readonly string[]),
+      );
+
+    if (filters.q) q = q.ilike('po_number', `%${filters.q}%`);
+    if (filters.retailer) {
+      const r = retailers.find((x) => x.name === filters.retailer);
+      if (r) q = q.eq('retailer_id', r.id);
+    }
+    if (filters.batch === 'unassigned') q = q.is('batch_id', null);
+    else if (filters.batch) q = q.eq('batch_id', filters.batch);
+    if (filters.value_min_cents != null) q = q.gte('po_value_cents', filters.value_min_cents);
+    if (filters.value_max_cents != null) q = q.lte('po_value_cents', filters.value_max_cents);
+
+    q = q.order(SORT_COLUMNS[filters.sort], { ascending: filters.dir === 'asc', nullsFirst: false });
+    q = q.order('id', { ascending: true });
+
+    const offset = (filters.page - 1) * filters.page_size;
+    q = q.range(offset, offset + filters.page_size - 1);
+
+    const result = await q;
+    rows = (result.data as RawRow[] | null) ?? null;
+    totalCount = result.count;
+    error = result.error;
+  }
+  const total = totalCount ?? 0;
+
   const candidates: CandidateItem[] = ((rows ?? []) as RawRow[]).map((p) => ({
     id: p.id,
     type: 'po_advance',
@@ -257,6 +303,10 @@ export default async function AssignToBatchPage({ params, searchParams }: PagePr
           value,
           label: humanizeStatus(value),
         }))}
+        types={(ITEM_TYPES as readonly string[]).map((value) => ({
+          value,
+          label: humanizeType(value),
+        }))}
         pageSizeOptions={[...ALLOWED_PAGE_SIZES]}
         candidates={candidates}
         totalCount={total}
@@ -266,6 +316,7 @@ export default async function AssignToBatchPage({ params, searchParams }: PagePr
           retailer: filters.retailer,
           batch: filters.batch,
           status: filters.status,
+          types: filters.types,
           value_min_cents: filters.value_min_cents,
           value_max_cents: filters.value_max_cents,
           sort: filters.sort,
@@ -283,6 +334,13 @@ function humanizeStatus(s: string): string {
   if (s === 'partially_invoiced') return 'Partially Invoiced';
   if (s === 'closed_awaiting_invoice') return 'Closed — Awaiting Invoice';
   return s;
+}
+
+function humanizeType(t: string): string {
+  if (t === 'po_advance') return 'PO Advance';
+  if (t === 'ar_advance') return 'AR Advance';
+  if (t === 'pre_advance') return 'Pre-Advance';
+  return t;
 }
 
 function serializeSp(sp: Record<string, string | string[] | undefined>): Record<string, string> {

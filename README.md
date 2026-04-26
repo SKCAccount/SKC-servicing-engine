@@ -68,7 +68,11 @@ pnpm test              # unit tests in every package
 - **1D commit 5** — per-Client dashboard aggregate metrics + Batch filter
 - **CSV-of-PO-numbers secondary entry path** for advances (with downloadable template)
 - **Per-underlying floor borrowing base** correctness fix (migration 0021)
+- **`po_cancelled` ledger event** when a Walmart upload flips an existing PO into cancelled status (migration 0022)
+- **Phase 1E-1** — XLSX infrastructure (`exceljs` + `xlsx.ts` shared utility) + Walmart invoice parser (pure, 34 tests)
+- **Phase 1E-2** — Kroger invoice parser (pure, three-way split into `invoices` + Promo / PRGX `client_deductions`, 29 tests)
+- **Type filter** on Assign-to-Batch (multi-select PO Advance / AR Advance / Pre-Advance)
 
-Coming up: invoice ingestion (Phase 1E — Walmart + Kroger XLSX, three-way Kroger split, partial-invoicing splits, PO→AR conversion, pre-advance conversion).
+Coming up: invoice upload UI + `commit_invoice_upload` RPC (Phase 1E-3) handling PO→AR conversion, partial invoicing splits, pre-advance conversion. Then Walmart/Kroger payment parsers + waterfall in 1F.
 
 See `CLAUDE.md` for the canonical "what's shipped" list and `docs/BUILD_PROMPT.md` §5 for the full sequencing.

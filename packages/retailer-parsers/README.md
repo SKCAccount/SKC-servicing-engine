@@ -94,6 +94,33 @@ The parser is async (exceljs uses Promises). Output shape:
 
 The upload handler (Phase 1E-3) is responsible for resolving `(retailer_slug, po_number)` → `purchase_order_id`, `(po_number, invoice_number)` → `invoice_id` for the deduction linkages, and the PO→AR conversion side effects (commit_invoice_upload RPC).
 
+## Kroger invoice parser (Phase 1E-2)
+
+`kroger/invoices/` parses Kroger's vendor-portal "Invoice search results" XLSX export (26 columns). Per `docs/03_PARSERS.md` §Kroger Invoices, the file mixes three kinds of rows:
+
+- **`Warehouse`** — real invoices. Routed to `rows: NormalizedInvoiceRecord[]`. Required: positive `Net invoice amount`, non-empty `PO number`. Stored with metadata for `kroger_division`, `kroger_payment_refs` (split on comma), `kroger_uploaded_by` ('KCL' expected; non-KCL warns), and a few other audit fields.
+- **`Promo Allowances`** — Kroger promotional chargebacks. Routed to `client_deductions: NormalizedClientDeductionRecord[]` with `source_category = 'promo_allowance'`, `source_subcategory = 'PromoBilling'`. Required: negative amount; sign inversion warns but still emits.
+- **`Non-Promo Receivable`** — PRGX post-audit recoveries. Routed to `client_deductions` with `source_category = 'non_promo_receivable'`, `source_subcategory = 'PRGX'`.
+
+Soft validations (warnings, still emit):
+- Sign mismatch on Promo / NPR (positive instead of negative).
+- Unexpected `PO number` on Promo / NPR (Kroger routing anomaly).
+- Gross ≠ Net on Warehouse (inline deductions on a Warehouse row are unusual).
+- Invoice received date < Invoice date (`kroger_date_anomaly`).
+- Format-vs-category mismatch (short integer numbers categorized as Promo, or hyphenated numbers categorized as Warehouse).
+- Non-USD currency.
+
+Hard skips:
+- Missing Invoice number / Invoice date / unparseable Net amount.
+- Warehouse row with non-positive amount or missing PO number.
+- Unknown `Invoice category`.
+
+The first header cell in the real export carries a UTF-8 BOM (`\uFEFF`); `xlsx.ts`'s `canonicalizeXlsxHeader` strips it during normalization. Without that strip, `'Invoice number'` would never match the BOMed header and the parser would throw `KrogerInvoiceHeaderError`.
+
+Excel-serial dates (Kroger's `Invoice date`, `Invoice received date`) come back from `exceljs` as JS `Date` objects; `xlsx.ts` converts to ISO `YYYY-MM-DD` (UTC date-only) before the parser sees them, so date handling is the same as for Walmart's text-stored dates.
+
+Kroger's PO export remains a stub — the parser skeleton in `kroger/purchase-orders/` throws a clear "not yet supported" message until Derek receives a sample file.
+
 ## Advance CSV: PO numbers entry path
 
 `advance-csv/po-numbers/` parses the spec's two-column "list of POs to advance against" template (`Purchase Order Number`, `Retailer`). Same single-source-of-truth pattern as the generic PO template: `PO_NUMBERS_TEMPLATE_HEADER` constant + `parsePoNumbersCsv()` function, served from `/api/advance-template/po-numbers` in apps/manager.

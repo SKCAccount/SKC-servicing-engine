@@ -60,6 +60,8 @@ interface CurrentFilters {
   retailer: string | null;
   batch: string | null;
   status: string | null;
+  /** Multi-select. Empty = no filter (all types). */
+  types: string[];
   value_min_cents: number | null;
   value_max_cents: number | null;
   sort: string;
@@ -68,12 +70,18 @@ interface CurrentFilters {
   page_size: number;
 }
 
+interface TypeOption {
+  value: string;
+  label: string;
+}
+
 interface Props {
   clientId: string;
   poAdvanceRateBps: number | null;
   retailers: RetailerOption[];
   batches: BatchOption[];
   statuses: StatusOption[];
+  types: TypeOption[];
   pageSizeOptions: number[];
   candidates: CandidateItem[];
   totalCount: number;
@@ -90,6 +98,7 @@ export function AssignToBatchForm(props: Props) {
     retailers,
     batches,
     statuses,
+    types,
     pageSizeOptions,
     candidates,
     totalCount,
@@ -215,6 +224,7 @@ export function AssignToBatchForm(props: Props) {
       retailer_slug: currentFilters.retailer,
       batch_id: currentFilters.batch,
       status: currentFilters.status,
+      types: currentFilters.types,
       value_min_cents: currentFilters.value_min_cents,
       value_max_cents: currentFilters.value_max_cents,
     };
@@ -295,6 +305,7 @@ export function AssignToBatchForm(props: Props) {
     retailer: string;
     batch: string;
     status: string;
+    types: string[];
     valueMin: string;
     valueMax: string;
     pageSize: string;
@@ -304,6 +315,7 @@ export function AssignToBatchForm(props: Props) {
       retailer: payload.retailer || null,
       batch: payload.batch || null,
       status: payload.status || null,
+      type: payload.types.length > 0 ? payload.types.join(',') : null,
       valueMin: payload.valueMin || null,
       valueMax: payload.valueMax || null,
       pageSize: payload.pageSize,
@@ -363,6 +375,7 @@ export function AssignToBatchForm(props: Props) {
           retailers={retailers}
           batches={batches}
           statuses={statuses}
+          types={types}
           pageSizeOptions={pageSizeOptions}
           initial={currentFilters}
           onApply={applyFilters}
@@ -768,6 +781,7 @@ function FilterForm({
   retailers,
   batches,
   statuses,
+  types,
   pageSizeOptions,
   initial,
   onApply,
@@ -776,6 +790,7 @@ function FilterForm({
   retailers: RetailerOption[];
   batches: BatchOption[];
   statuses: StatusOption[];
+  types: TypeOption[];
   pageSizeOptions: number[];
   initial: CurrentFilters;
   onApply: (payload: {
@@ -783,6 +798,7 @@ function FilterForm({
     retailer: string;
     batch: string;
     status: string;
+    types: string[];
     valueMin: string;
     valueMax: string;
     pageSize: string;
@@ -793,6 +809,7 @@ function FilterForm({
   const [retailer, setRetailer] = useState(initial.retailer ?? '');
   const [batch, setBatch] = useState(initial.batch ?? '');
   const [status, setStatus] = useState(initial.status ?? '');
+  const [selTypes, setSelTypes] = useState<string[]>(initial.types);
   const [valueMin, setValueMin] = useState(
     initial.value_min_cents != null ? (initial.value_min_cents / 100).toString() : '',
   );
@@ -805,7 +822,7 @@ function FilterForm({
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        onApply({ q, retailer, batch, status, valueMin, valueMax, pageSize });
+        onApply({ q, retailer, batch, status, types: selTypes, valueMin, valueMax, pageSize });
       }}
       className="rounded-lg border border-seaking-border bg-seaking-surface p-4"
     >
@@ -818,6 +835,26 @@ function FilterForm({
             placeholder="substring"
             className="w-full rounded border border-seaking-border px-3 py-1.5 text-sm outline-none focus:border-seaking-navy"
           />
+        </FFieldFor>
+        <FFieldFor label="Type (Cmd/Ctrl-click for multi)">
+          <select
+            multiple
+            value={selTypes}
+            onChange={(e) =>
+              setSelTypes(Array.from(e.target.selectedOptions).map((o) => o.value))
+            }
+            size={3}
+            className="w-full rounded border border-seaking-border bg-white px-2 py-1 text-sm outline-none focus:border-seaking-navy"
+          >
+            {types.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </select>
+          {selTypes.length === 0 && (
+            <p className="mt-1 text-[10px] text-seaking-muted">No selection = all types</p>
+          )}
         </FFieldFor>
         <FFieldFor label="Retailer">
           <select

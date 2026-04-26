@@ -68,7 +68,7 @@ apps/manager/
 
 ## Patterns to know about
 
-- **List pages** (`/clients/[id]/purchase-orders`, `/clients/[id]/advances/po/new`, `/clients/[id]/batches/assign`) follow the conventions documented in `CLAUDE.md` §"List-page UX conventions": URL-driven filter/sort/pagination, server-side sort whitelist, client-side `Map<id, fullData>` for selection that survives URL navigations, comma-separated multi-value filters, `v_purchase_orders_with_balance` for principal-aware sorts.
+- **List pages** (`/clients/[id]/purchase-orders`, `/clients/[id]/advances/po/new`, `/clients/[id]/batches/assign`) follow the conventions documented in `CLAUDE.md` §"List-page UX conventions": URL-driven filter/sort/pagination, server-side sort whitelist, client-side `Map<id, fullData>` for selection that survives URL navigations, comma-separated multi-value filters (Batch / Status / Type), `v_purchase_orders_with_balance` for principal-aware sorts.
 - **Server Actions** all return `ActionResult<T>` from `@seaking/api`. Use `zodError` / `supabaseError` from `src/lib/action-helpers.ts` to translate framework errors into the shared shape.
 - **Auth callback** (`/auth/callback/route.ts`) handles both PKCE (`?code=`) and OTP (`?token_hash=&type=`) flows. Invites and password resets use the OTP path; OAuth (future) uses PKCE.
 - **Optimistic locking** via `expected_version` on every update server action. See e.g. `clients/[clientId]/edit/actions.ts`.

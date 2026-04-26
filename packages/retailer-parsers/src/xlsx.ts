@@ -58,9 +58,16 @@ export interface XlsxParseOptions {
   sheet_name?: string;
 }
 
-/** Collapse internal whitespace runs to a single space; trim ends. */
+/**
+ * Collapse internal whitespace runs to a single space; trim ends; strip
+ * UTF-8 BOM. The BOM stripping matters: Kroger's invoice export emits a
+ * `\uFEFF` prefix on the first header cell (likely from the upstream
+ * source that wrote the XLSX). exceljs preserves cell text as-is, so the
+ * raw header `'\uFEFFInvoice number'` would never match `'Invoice number'`
+ * unless we strip it here.
+ */
 export function canonicalizeXlsxHeader(h: string): string {
-  return h.replace(/\s+/g, ' ').trim();
+  return h.replace(/^\uFEFF/, '').replace(/\s+/g, ' ').trim();
 }
 
 /** Trim leading/trailing whitespace from a cell value; return null for empty. */

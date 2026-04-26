@@ -340,7 +340,7 @@ Primary Manager UI. Routes built so far:
 - `/clients/[clientId]/po-uploads/new` — PO Upload (Walmart auto-detect + generic CSV), two-phase preview → commit
 - `/clients/[clientId]/purchase-orders` — PO list with URL-driven filter/sort/pagination
 - `/clients/[clientId]/advances/po/new` — Advance on POs: multi-page selection, ratio-leveling preview, batch-reassignment ack, multi-select Batch + Status filters, sortable Current Principal, CSV-of-PO-numbers secondary entry path with downloadable template
-- `/clients/[clientId]/batches/assign` — Standalone Assign-to-Batch screen with the spec's unified outstanding-items table (POs only today; pre-advances + invoices fold in when those creation paths exist)
+- `/clients/[clientId]/batches/assign` — Standalone Assign-to-Batch screen with the spec's unified outstanding-items table. Multi-select Type filter (PO Advance / AR Advance / Pre-Advance) wired via `?type=…` URL param. POs only today; pre-advances + invoices fold in when those creation paths exist (1E-3 onward).
 - `/users` — roster + grants table
 - `/users/new` — Admin-only invite
 - `/users/[userId]` — Admin-only edit (self-edit blocked)

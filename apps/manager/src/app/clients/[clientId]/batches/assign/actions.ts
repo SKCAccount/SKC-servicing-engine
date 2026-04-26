@@ -66,6 +66,14 @@ export interface FetchMatchingItemsFilter {
   retailer_slug: string | null;
   batch_id: string | null; // 'unassigned' OR a UUID OR null
   status: string | null;
+  /**
+   * Multi-select item type filter. Empty = no filter (all types).
+   * Values mirror the page-side ITEM_TYPES list ('po_advance', 'ar_advance',
+   * 'pre_advance'). Today only 'po_advance' rows actually exist; until
+   * Phase 1E-3 adds the other sources, this filter functionally collapses
+   * to "include or exclude PO Advance."
+   */
+  types: string[];
   value_min_cents: number | null;
   value_max_cents: number | null;
 }
@@ -115,6 +123,14 @@ export async function fetchAllMatchingItemsAction(
     filter.status && (ELIGIBLE_STATUSES as readonly string[]).includes(filter.status)
       ? [filter.status]
       : (ELIGIBLE_STATUSES as readonly string[]);
+
+  // Type filter — short-circuit when 'po_advance' is excluded. Today the
+  // only row source is the v_purchase_orders_with_balance query below.
+  // When 1E-3 adds AR / pre-advance sources, gate each one analogously.
+  const includePoAdvance = filter.types.length === 0 || filter.types.includes('po_advance');
+  if (!includePoAdvance) {
+    return ok({ items: [], truncated: false, totalCount: 0 });
+  }
 
   // Step 1: count.
   let countQ = supabase
