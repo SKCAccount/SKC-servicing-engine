@@ -269,6 +269,7 @@ Four materialized views (`mv_advance_balances`, `mv_client_position`, `mv_invoic
 |---|---|---|
 | `commit_po_advance(...)` RPC | `advance_committed` (1 per new advance), `po_batch_reassigned` (1 per PO whose batch changes) | 0017 / 0018 / 0020 |
 | `reassign_to_batch(...)` RPC | `po_batch_reassigned` (1 per PO whose batch changes) | 0020 |
+| `bulk_upsert_purchase_orders(...)` RPC | `po_cancelled` (1 per PO transitioning outstanding → cancelled), `po_cancellation_reversed` (1 per PO transitioning cancelled → outstanding when a prior unreversed `po_cancelled` exists) | 0022 |
 
 `commit_po_advance` is the canonical pattern for ledger-writing RPCs: validate inputs → resolve `rule_set_id` and `batch_id` → reassign POs (emitting one `po_batch_reassigned` event per PO that moved, plus carrying any existing committed/funded advances on those POs to the new batch per "advance batch follows PO") → INSERT advances and paired `advance_committed` events in one transaction → call `refresh_po_projections()`. New writers (advance funding, invoice ingestion, payments) should follow this shape. See migrations 0017/0018/0020 for the worked example.
 
