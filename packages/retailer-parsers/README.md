@@ -15,8 +15,9 @@ The **upload handler** in `apps/manager` owns persistence: writing the raw file 
 
 ```
 packages/retailer-parsers/src/
-├── types.ts                     — ParseContext, ParseResult, NormalizedPoRecord (with retailer_slug), etc.
+├── types.ts                     — ParseContext, ParseResult, NormalizedPoRecord, NormalizedInvoiceRecord, NormalizedInvoiceDeductionRecord, NormalizedClientDeductionRecord, etc.
 ├── csv.ts                       — papaparse wrapper + header canonicalization + CRLF→LF normalization
+├── xlsx.ts                      — exceljs wrapper + header canonicalization + cell-value-to-string normalization (Date → ISO, rich text → concatenated, etc.)
 ├── dates.ts                     — MM/DD/YYYY and MM-DD-YYYY parsers
 ├── walmart/
 │   ├── shared.ts                — helpers used by header AND line parsers (status mapping, OMS cross-check, etc.)
@@ -25,11 +26,12 @@ packages/retailer-parsers/src/
 │   │   ├── header-level.ts      — 1 row per PO, the fallback path
 │   │   ├── line-level.ts        — N rows per PO, the default path
 │   │   └── __fixtures__/        — real-sample slices from Derek's uploads
-│   ├── invoices/                — Phase 1E
+│   ├── invoices/                — Real parser (1E-1). XLSX. Filter rules + Allowance Amt deduction extraction + RETURN CENTER CLAIMS routing to client_deductions.
+│   │   └── __fixtures__/
 │   └── payments/                — Phase 1F
 ├── kroger/
 │   ├── purchase-orders/         — Stub: throws with a clear message until a sample file arrives
-│   ├── invoices/                — Phase 1E
+│   ├── invoices/                — Phase 1E-2
 │   └── payments/                — Phase 1F
 ├── generic/
 │   └── purchase-orders/         — Real parser (1C). One CSV may span multiple retailers (per-row Retailer column).
@@ -62,6 +64,35 @@ Used by the upload UI's "Generic CSV template" option for retailers without a de
 **Retailer resolution** is the upload handler's job — it matches the parser's lowercased `retailer_slug` against `retailers.name` OR `display_name` (case-insensitive). Unresolved slugs surface as skipped rows in the upload review. Admin must pre-create new retailers in `retailers` (Studio only — no UI yet).
 
 The exported `GENERIC_PO_TEMPLATE_HEADER` constant is the canonical column list. The Manager app's `/api/po-template/generic` route serves it as a downloadable CSV so the template can never drift from what the parser accepts.
+
+## Walmart invoice parser (Phase 1E-1)
+
+`walmart/invoices/` parses Walmart's APIS 2.0 "Invoice By Date Search" XLSX export (16 columns). Per `docs/03_PARSERS.md` §Walmart Invoices:
+
+- **Invoice number leading-zero handling.** Walmart stores invoice numbers as zero-padded text (`'000008939228281'`). The parser strips for canonical `invoice_number` and retains the padded form in `metadata.display_invoice_number`.
+- **Three-way row routing.**
+  - `Source = "RETURN CENTER CLAIMS"` AND `Net Amount = 0` → SKIP with reason `return_center_claim_zero_dollar`
+  - `Source = "RETURN CENTER CLAIMS"` AND `Net Amount ≠ 0` → emit a `client_deductions` row (`source_category = chargeback`, `source_subcategory = walmart_return_center_claim`)
+  - Any other `Source` → emit an invoice row
+- **Allowance Amt extraction.** When an invoice row has `Allowance Amt ≠ 0`, the parser emits one `invoice_deductions` row alongside the invoice with `category` mapped via substring match on `Allowances Type` (`promotional` / `damage` / `shortage` / `otif_fine` / `pricing` / `other`) and `memo` from `Allowance Desc` (or fallback).
+- **Soft validations.** `Invoice Type ≠ "W"` emits a warning but still creates the invoice. `Invoice Type = "W"` is the warehouse-invoice expectation; novel types surface for Manager review.
+- **Hard skips.** Missing Invoice No / PO Number / unparseable Invoice Date / unparseable Net Amount Due / negative Net Amount on a non-RCC row.
+
+The parser is async (exceljs uses Promises). Output shape:
+
+```ts
+{
+  parser_version: 'walmart-invoices/1.0.0',
+  rows: NormalizedInvoiceRecord[],
+  invoice_deductions: NormalizedInvoiceDeductionRecord[],
+  client_deductions: NormalizedClientDeductionRecord[],
+  warnings: ParseWarning[],
+  skipped: SkippedRow[],
+  stats: { total_rows_read, valid_invoice_rows, invoice_deduction_rows, client_deduction_rows, skipped_rows, warning_count }
+}
+```
+
+The upload handler (Phase 1E-3) is responsible for resolving `(retailer_slug, po_number)` → `purchase_order_id`, `(po_number, invoice_number)` → `invoice_id` for the deduction linkages, and the PO→AR conversion side effects (commit_invoice_upload RPC).
 
 ## Advance CSV: PO numbers entry path
 

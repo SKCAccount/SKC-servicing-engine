@@ -17,6 +17,9 @@ export type {
   CancellationReason,
   NormalizedPoRecord,
   NormalizedPoLineRecord,
+  NormalizedInvoiceRecord,
+  NormalizedInvoiceDeductionRecord,
+  NormalizedClientDeductionRecord,
   SkippedRow,
 } from './types';
 

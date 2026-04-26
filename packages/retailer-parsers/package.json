@@ -25,6 +25,7 @@
   "dependencies": {
     "@seaking/dates": "workspace:*",
     "@seaking/money": "workspace:*",
+    "exceljs": "^4.4.0",
     "papaparse": "^5.4.1"
   },
   "devDependencies": {

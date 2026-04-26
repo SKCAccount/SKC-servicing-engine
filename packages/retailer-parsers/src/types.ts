@@ -130,6 +130,106 @@ export interface NormalizedPoLineRecord {
   metadata: Record<string, unknown>;
 }
 
+// --------------------------------------------------------------------------
+// Invoice-side types (Phase 1E)
+// --------------------------------------------------------------------------
+
+/**
+ * Normalized invoice record emitted by any invoice parser.
+ *
+ * Matches the `invoices` table shape closely. The upload handler resolves
+ * `(retailer_slug, po_number)` to a real `purchase_order_id` before
+ * persisting; rows whose PO can't be found are surfaced as upload-review
+ * warnings rather than emitted as orphan invoices.
+ */
+export interface NormalizedInvoiceRecord {
+  /** Retailer slug (matches retailers.name, lowercase). */
+  retailer_slug: string;
+  /**
+   * Retailer's PO # this invoice covers (string to preserve leading zeros).
+   * Phase 1 assumes a 1:1 invoice→PO mapping; future spec resolution
+   * §"Partial invoicing" may relax to N:M but doesn't change the parser
+   * shape (one record per source invoice row).
+   */
+  po_number: string;
+  /**
+   * Stripped form of the invoice number — leading zeros removed. The
+   * padded display form is preserved in `metadata.display_invoice_number`
+   * so the UI can show users the format their retailer sees.
+   */
+  invoice_number: string;
+  /** Per 02_SCHEMA.md — invoice value in integer cents (>= 0). */
+  invoice_value_cents: Cents;
+  /** ISO YYYY-MM-DD. NOT NULL per migration 0011/0012. */
+  invoice_date: string;
+  /** ISO YYYY-MM-DD or null. */
+  due_date: string | null;
+  /** ISO YYYY-MM-DD or null. */
+  goods_delivery_date: string | null;
+  /** Free-text location. */
+  goods_delivery_location: string | null;
+  /** Free-text status from source (Walmart "Process State Description", etc.). */
+  approval_status: string | null;
+  /** Free-text item description. */
+  item_description: string | null;
+  /** Free-form retailer-specific payload (microfilm number, vendor info, etc.). */
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * Invoice-tied deduction (e.g. Walmart Allowance Amt extracted from a real
+ * invoice row). Matches the `invoice_deductions` table. Resolved to a real
+ * `invoice_id` by the upload handler via `(po_number, invoice_number)`.
+ */
+export interface NormalizedInvoiceDeductionRecord {
+  retailer_slug: string;
+  po_number: string;
+  /** Stripped invoice number — same convention as NormalizedInvoiceRecord. */
+  invoice_number: string;
+  /** Maps to deduction_category enum. */
+  category: 'shortage' | 'damage' | 'otif_fine' | 'pricing' | 'promotional' | 'other';
+  /** Always positive cents; the sign is implicit (deductions reduce AR). */
+  amount_cents: Cents;
+  memo: string | null;
+  /** ISO YYYY-MM-DD when the deduction was first known. NOT NULL in schema. */
+  known_on_date: string;
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * Client-level deduction, NOT tied to a specific invoice in our system. Used
+ * for retailer chargebacks that arrive separate from any invoice we ingest:
+ *
+ *   * Walmart "RETURN CENTER CLAIMS" rows with non-zero amounts
+ *   * Kroger "Promo Allowances" (Phase 1E-2)
+ *   * Kroger "Non-Promo Receivable" / PRGX post-audit recoveries (1E-2)
+ *
+ * Matches the `client_deductions` table (migration 0009). Upload handler
+ * resolves retailer_slug to retailer_id; po_number is informational only
+ * (no FK in the table — the row stands alone or links via metadata).
+ */
+export interface NormalizedClientDeductionRecord {
+  retailer_slug: string;
+  /** Retailer's own ref for this deduction (e.g. Walmart Invoice No, Kroger Invoice number). */
+  source_ref: string;
+  /** Maps to client_deduction_source enum. */
+  source_category: 'promo_allowance' | 'non_promo_receivable' | 'netting_offset' | 'chargeback' | 'other';
+  /** Retailer-specific subcategory string (PromoBilling, PRGX, walmart_return_center_claim, ...). */
+  source_subcategory: string | null;
+  /** Always positive cents. */
+  amount_cents: Cents;
+  memo: string | null;
+  /** ISO YYYY-MM-DD. */
+  known_on_date: string;
+  /** Optional originating PO number for traceability; no FK. */
+  po_number: string | null;
+  /** Kroger Division string ("011 - ATLANTA KMA"), Walmart store/DC, etc. */
+  division: string | null;
+  /** Free-text location. */
+  location_description: string | null;
+  metadata: Record<string, unknown>;
+}
+
 /** Result returned by every parser. Consumed by the upload review UI. */
 export interface ParseResult<TRecord = NormalizedPoRecord> {
   /** semver-ish version string, e.g. "walmart-po-header/1.0.0". */
